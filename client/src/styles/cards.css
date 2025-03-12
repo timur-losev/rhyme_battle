@@ -1,0 +1,118 @@
+/* Стили для карт */
+.card {
+  width: 100%;
+  aspect-ratio: 3/4;
+  border-radius: 15px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+  background: linear-gradient(135deg, #333 0%, #111 100%);
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.card:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 6px 12px rgba(0, 0, 0, 0.4);
+}
+
+.card-header {
+  padding: 10px;
+  background-color: rgba(0, 0, 0, 0.4);
+  color: #fff;
+  font-weight: bold;
+  font-size: 0.9rem;
+}
+
+.card-content {
+  flex: 1;
+  padding: 10px;
+  background-color: rgba(0, 0, 0, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 4rem;
+  opacity: 0.4;
+}
+
+.card-footer {
+  padding: 10px;
+  background-color: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  display: flex;
+  justify-content: space-between;
+}
+
+/* Различные типы карт */
+.card-default {
+  background: linear-gradient(135deg, #333 0%, #111 100%);
+}
+
+.card-common {
+  background: linear-gradient(135deg, #2c5e1a 0%, #142b0b 100%);
+}
+
+.card-rare {
+  background: linear-gradient(135deg, #1a3c8d 0%, #0a1733 100%);
+}
+
+.card-epic {
+  background: linear-gradient(135deg, #5c2a7a 0%, #2d1538 100%);
+}
+
+.card-legendary {
+  background: linear-gradient(135deg, #976f09 0%, #634808 100%);
+}
+
+/* Символы для разных типов карт */
+.card-default .card-content::after {
+  content: "♦";
+}
+
+.card-common .card-content::after {
+  content: "♠";
+}
+
+.card-rare .card-content::after {
+  content: "♣";
+}
+
+.card-epic .card-content::after {
+  content: "♥";
+}
+
+.card-legendary .card-content::after {
+  content: "★";
+}
+
+/* Индикатор редкости */
+.rarity-indicator {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+}
+
+.card-default .rarity-indicator {
+  background-color: #aaa;
+}
+
+.card-common .rarity-indicator {
+  background-color: #7FFF00;
+}
+
+.card-rare .rarity-indicator {
+  background-color: #1E90FF;
+}
+
+.card-epic .rarity-indicator {
+  background-color: #9932CC;
+}
+
+.card-legendary .rarity-indicator {
+  background: linear-gradient(45deg, #FFD700, #FFA500);
+} 

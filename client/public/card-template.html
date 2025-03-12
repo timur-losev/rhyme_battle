@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Шаблон карты для игры Rhyme Master</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      font-family: 'Arial', sans-serif;
+      background-color: #1a1a1a;
+      color: white;
+    }
+    
+    h1 {
+      margin-bottom: 30px;
+      color: #f5f5f5;
+    }
+    
+    .instructions {
+      max-width: 600px;
+      margin-bottom: 30px;
+      line-height: 1.5;
+      background-color: #2d2d2d;
+      padding: 15px;
+      border-radius: 8px;
+    }
+    
+    .card-container {
+      display: flex;
+      gap: 40px;
+      margin-bottom: 50px;
+    }
+    
+    .card {
+      width: 240px;
+      height: 340px;
+      background: linear-gradient(135deg, #333 0%, #111 100%);
+      border-radius: 15px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      box-shadow: 0 10px 20px rgba(0, 0, 0, 0.5);
+      position: relative;
+    }
+    
+    .card-header {
+      height: 40px;
+      background-color: #222;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 15px;
+      border-bottom: 2px solid #444;
+    }
+    
+    .card-title {
+      font-weight: bold;
+      font-size: 14px;
+      color: #f0f0f0;
+    }
+    
+    .card-type {
+      font-size: 12px;
+      color: #aaa;
+    }
+    
+    .card-image {
+      height: 140px;
+      background: linear-gradient(45deg, #444 0%, #222 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-bottom: 2px solid #444;
+    }
+    
+    .card-symbol {
+      font-size: 50px;
+      opacity: 0.8;
+    }
+    
+    .card-content {
+      flex: 1;
+      padding: 15px;
+      font-size: 14px;
+      line-height: 1.4;
+      color: #ddd;
+      background-color: #292929;
+    }
+    
+    .card-footer {
+      height: 40px;
+      background-color: #222;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 15px;
+      border-top: 2px solid #444;
+    }
+    
+    .card-stats {
+      display: flex;
+      gap: 15px;
+    }
+    
+    .stat {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    
+    .stat-icon {
+      width: 16px;
+      height: 16px;
+      background-color: #666;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+    }
+    
+    .card-rarity {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+    }
+    
+    /* Варианты карт */
+    .default .card-rarity {
+      background-color: #aaa;
+    }
+    
+    .common .card-rarity {
+      background-color: #7FFF00;
+    }
+    
+    .rare .card-rarity {
+      background-color: #1E90FF;
+    }
+    
+    .epic .card-rarity {
+      background-color: #9932CC;
+    }
+    
+    .legendary .card-rarity {
+      background: linear-gradient(45deg, #FFD700, #FFA500);
+    }
+  </style>
+</head>
+<body>
+  <h1>Шаблоны карт для Rhyme Master</h1>
+  
+  <div class="instructions">
+    <p>Это шаблоны карт для игры Rhyme Master. Сделайте скриншот каждой карты и сохраните как PNG.</p>
+    <p>Необходимые файлы:</p>
+    <ul>
+      <li>client/public/images/cards/default.png (карта по умолчанию)</li>
+      <li>client/public/images/cards/common.png</li>
+      <li>client/public/images/cards/rare.png</li>
+      <li>client/public/images/cards/epic.png</li>
+      <li>client/public/images/cards/legendary.png</li>
+    </ul>
+  </div>
+  
+  <div class="card-container">
+    <!-- Карта по умолчанию -->
+    <div class="card default">
+      <div class="card-header">
+        <div class="card-title">Карта по умолчанию</div>
+        <div class="card-type">Базовая</div>
+      </div>
+      <div class="card-image">
+        <div class="card-symbol">♦</div>
+      </div>
+      <div class="card-content">
+        Выберите эту карту, чтобы начать баттл. Базовая карта для новичков.
+      </div>
+      <div class="card-footer">
+        <div class="card-stats">
+          <div class="stat">
+            <div class="stat-icon">A</div>
+            <span>2</span>
+          </div>
+          <div class="stat">
+            <div class="stat-icon">D</div>
+            <span>1</span>
+          </div>
+        </div>
+      </div>
+      <div class="card-rarity"></div>
+    </div>
+    
+    <!-- Обычная карта -->
+    <div class="card common">
+      <div class="card-header">
+        <div class="card-title">Обычная карта</div>
+        <div class="card-type">Атака</div>
+      </div>
+      <div class="card-image">
+        <div class="card-symbol">♠</div>
+      </div>
+      <div class="card-content">
+        Простой рифмованный куплет. Наносит базовый урон противнику.
+      </div>
+      <div class="card-footer">
+        <div class="card-stats">
+          <div class="stat">
+            <div class="stat-icon">A</div>
+            <span>3</span>
+          </div>
+          <div class="stat">
+            <div class="stat-icon">D</div>
+            <span>2</span>
+          </div>
+        </div>
+      </div>
+      <div class="card-rarity"></div>
+    </div>
+  </div>
+  
+  <div class="card-container">
+    <!-- Редкая карта -->
+    <div class="card rare">
+      <div class="card-header">
+        <div class="card-title">Редкая карта</div>
+        <div class="card-type">Защита</div>
+      </div>
+      <div class="card-image">
+        <div class="card-symbol">♣</div>
+      </div>
+      <div class="card-content">
+        Мощный дисс с крутыми рифмами. Наносит больше урона и дает дополнительную защиту.
+      </div>
+      <div class="card-footer">
+        <div class="card-stats">
+          <div class="stat">
+            <div class="stat-icon">A</div>
+            <span>4</span>
+          </div>
+          <div class="stat">
+            <div class="stat-icon">D</div>
+            <span>4</span>
+          </div>
+        </div>
+      </div>
+      <div class="card-rarity"></div>
+    </div>
+    
+    <!-- Эпическая карта -->
+    <div class="card epic">
+      <div class="card-header">
+        <div class="card-title">Эпическая карта</div>
+        <div class="card-type">Комбо</div>
+      </div>
+      <div class="card-image">
+        <div class="card-symbol">♥</div>
+      </div>
+      <div class="card-content">
+        Эпический флоу с многослойными рифмами. Наносит большой урон и дает возможность сыграть еще одну карту.
+      </div>
+      <div class="card-footer">
+        <div class="card-stats">
+          <div class="stat">
+            <div class="stat-icon">A</div>
+            <span>6</span>
+          </div>
+          <div class="stat">
+            <div class="stat-icon">D</div>
+            <span>3</span>
+          </div>
+        </div>
+      </div>
+      <div class="card-rarity"></div>
+    </div>
+  </div>
+  
+  <div class="card-container">
+    <!-- Легендарная карта -->
+    <div class="card legendary">
+      <div class="card-header">
+        <div class="card-title">Легендарная карта</div>
+        <div class="card-type">Ультра</div>
+      </div>
+      <div class="card-image">
+        <div class="card-symbol">★</div>
+      </div>
+      <div class="card-content">
+        Легендарный куплет, который войдет в историю. Наносит критический урон всем противникам и дает щит.
+      </div>
+      <div class="card-footer">
+        <div class="card-stats">
+          <div class="stat">
+            <div class="stat-icon">A</div>
+            <span>8</span>
+          </div>
+          <div class="stat">
+            <div class="stat-icon">D</div>
+            <span>5</span>
+          </div>
+        </div>
+      </div>
+      <div class="card-rarity"></div>
+    </div>
+  </div>
+</body>
+</html> 

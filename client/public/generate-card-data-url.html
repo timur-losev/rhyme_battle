@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Генератор Data URL для карт</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+      background-color: #f5f5f5;
+    }
+    
+    h1 {
+      text-align: center;
+      margin-bottom: 30px;
+    }
+    
+    canvas {
+      display: block;
+      margin: 20px auto;
+      border: 1px solid #ddd;
+    }
+    
+    .controls {
+      margin-bottom: 30px;
+      display: flex;
+      gap: 10px;
+      justify-content: center;
+    }
+    
+    button {
+      padding: 10px 20px;
+      background-color: #4285f4;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 16px;
+    }
+    
+    button:hover {
+      background-color: #3367d6;
+    }
+    
+    .output {
+      margin-top: 30px;
+    }
+    
+    .data-url {
+      word-break: break-all;
+      padding: 15px;
+      background-color: #f0f0f0;
+      border-radius: 4px;
+      max-height: 200px;
+      overflow-y: auto;
+      font-family: monospace;
+      font-size: 12px;
+    }
+    
+    .instructions {
+      margin-top: 30px;
+      background-color: #e1f5fe;
+      padding: 15px;
+      border-radius: 4px;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+  <h1>Генератор карты для игры</h1>
+  
+  <div class="controls">
+    <button id="generateDefault">Сгенерировать карту</button>
+    <button id="downloadImage">Скачать как PNG</button>
+  </div>
+  
+  <canvas id="cardCanvas" width="240" height="340"></canvas>
+  
+  <div class="instructions">
+    <h3>Инструкции:</h3>
+    <ol>
+      <li>Нажмите "Сгенерировать карту", чтобы создать изображение карты по умолчанию</li>
+      <li>Нажмите "Скачать как PNG", чтобы сохранить изображение</li>
+      <li>Сохраните файл как <strong>default.png</strong> в папке <code>client/public/images/cards/</code></li>
+    </ol>
+  </div>
+  
+  <script>
+    // Получаем элементы
+    const canvas = document.getElementById('cardCanvas');
+    const ctx = canvas.getContext('2d');
+    const generateBtn = document.getElementById('generateDefault');
+    const downloadBtn = document.getElementById('downloadImage');
+    
+    // Функция для рисования карты по умолчанию
+    function drawDefaultCard() {
+      // Фон
+      const gradient = ctx.createLinearGradient(0, 0, 240, 340);
+      gradient.addColorStop(0, '#333');
+      gradient.addColorStop(1, '#111');
+      
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, 240, 340);
+      
+      // Скругленные углы (имитация)
+      ctx.fillStyle = '#000';
+      ctx.beginPath();
+      ctx.arc(10, 10, 10, 0, Math.PI * 2);
+      ctx.arc(230, 10, 10, 0, Math.PI * 2);
+      ctx.arc(10, 330, 10, 0, Math.PI * 2);
+      ctx.arc(230, 330, 10, 0, Math.PI * 2);
+      ctx.fill();
+      
+      // Темный градиент для фона
+      ctx.fillStyle = gradient;
+      ctx.fillRect(10, 0, 220, 340);
+      ctx.fillRect(0, 10, 240, 320);
+      
+      // Знак вопроса
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
+      ctx.font = '120px Arial';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('?', 120, 170);
+      
+      // Рамка
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(10, 10, 220, 320);
+    }
+    
+    // Обработчик для кнопки генерации
+    generateBtn.addEventListener('click', () => {
+      drawDefaultCard();
+    });
+    
+    // Обработчик для кнопки скачивания
+    downloadBtn.addEventListener('click', () => {
+      const dataUrl = canvas.toDataURL('image/png');
+      const link = document.createElement('a');
+      link.href = dataUrl;
+      link.download = 'default.png';
+      link.click();
+    });
+    
+    // Рисуем карту при загрузке
+    window.addEventListener('load', drawDefaultCard);
+  </script>
+</body>
+</html> 

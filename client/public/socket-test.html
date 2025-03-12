@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Socket.IO Test</title>
+  <script src="https://cdn.socket.io/4.6.1/socket.io.min.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+    .status { padding: 10px; border-radius: 5px; margin-bottom: 10px; }
+    .connected { background-color: #dff0d8; color: #3c763d; }
+    .disconnected { background-color: #f2dede; color: #a94442; }
+    .connecting { background-color: #fcf8e3; color: #8a6d3b; }
+    button { padding: 10px 15px; margin: 5px; cursor: pointer; }
+    #log { height: 200px; overflow-y: auto; border: 1px solid #ccc; padding: 10px; margin-top: 20px; }
+    .log-entry { margin-bottom: 5px; border-bottom: 1px dotted #eee; padding-bottom: 5px; }
+    .log-time { color: #999; font-size: 0.8em; }
+    .log-message { margin-left: 10px; }
+    .error { color: red; }
+    .info { color: blue; }
+    .success { color: green; }
+  </style>
+</head>
+<body>
+  <h1>Socket.IO Тестовая страница</h1>
+  
+  <div id="statusContainer" class="status connecting">
+    <p>Статус: <span id="status">Подключение...</span></p>
+    <p>Socket ID: <span id="socketId">Нет</span></p>
+  </div>
+  
+  <div>
+    <button onclick="connect()">Подключиться</button>
+    <button onclick="disconnect()">Отключиться</button>
+    <button onclick="sendPing()">Отправить пинг</button>
+    <button onclick="clearLog()">Очистить лог</button>
+  </div>
+  
+  <div>
+    <h3>Настройки</h3>
+    <div>
+      <label>
+        URL сервера:
+        <input type="text" id="serverUrl" value="http://localhost:5101" style="width: 250px;">
+      </label>
+    </div>
+    <div>
+      <label>
+        <input type="checkbox" id="withCredentials" checked>
+        withCredentials
+      </label>
+    </div>
+    <div>
+      <label>
+        Транспорт:
+        <select id="transport">
+          <option value="default">По умолчанию</option>
+          <option value="websocket">Только WebSocket</option>
+          <option value="polling">Только Polling</option>
+        </select>
+      </label>
+    </div>
+  </div>
+  
+  <div id="log"></div>
+  
+  <script>
+    let socket = null;
+    
+    function logMessage(message, type = 'info') {
+      const log = document.getElementById('log');
+      const entry = document.createElement('div');
+      entry.className = `log-entry ${type}`;
+      
+      const time = document.createElement('span');
+      time.className = 'log-time';
+      time.textContent = new Date().toLocaleTimeString();
+      
+      const msg = document.createElement('span');
+      msg.className = 'log-message';
+      msg.textContent = message;
+      
+      entry.appendChild(time);
+      entry.appendChild(msg);
+      log.appendChild(entry);
+      log.scrollTop = log.scrollHeight;
+    }
+    
+    function clearLog() {
+      document.getElementById('log').innerHTML = '';
+    }
+    
+    function updateStatus(status, isConnected) {
+      document.getElementById('status').textContent = status;
+      const container = document.getElementById('statusContainer');
+      
+      if (isConnected === true) {
+        container.className = 'status connected';
+      } else if (isConnected === false) {
+        container.className = 'status disconnected';
+      } else {
+        container.className = 'status connecting';
+      }
+    }
+    
+    function disconnect() {
+      if (socket) {
+        socket.disconnect();
+        logMessage('Отключение вызвано пользователем');
+      }
+    }
+    
+    function connect() {
+      if (socket) {
+        socket.disconnect();
+      }
+      
+      const url = document.getElementById('serverUrl').value;
+      const withCredentials = document.getElementById('withCredentials').checked;
+      const transport = document.getElementById('transport').value;
+      
+      let transportOption = {};
+      if (transport === 'websocket') {
+        transportOption = { transports: ['websocket'] };
+      } else if (transport === 'polling') {
+        transportOption = { transports: ['polling'] };
+      }
+      
+      updateStatus('Подключение...', null);
+      logMessage(`Подключение к ${url} (withCredentials: ${withCredentials}, transport: ${transport})`);
+      
+      socket = io(url, {
+        withCredentials,
+        ...transportOption,
+        reconnection: true
+      });
+      
+      socket.on('connect', () => {
+        updateStatus('Подключено', true);
+        document.getElementById('socketId').textContent = socket.id;
+        logMessage(`Подключено! ID: ${socket.id}`, 'success');
+      });
+      
+      socket.on('disconnect', (reason) => {
+        updateStatus(`Отключено: ${reason}`, false);
+        document.getElementById('socketId').textContent = 'Нет';
+        logMessage(`Отключено. Причина: ${reason}`, 'error');
+      });
+      
+      socket.on('connect_error', (err) => {
+        updateStatus(`Ошибка: ${err.message}`, false);
+        logMessage(`Ошибка подключения: ${err.message}`, 'error');
+      });
+      
+      socket.on('error', (err) => {
+        logMessage(`Общая ошибка: ${err}`, 'error');
+      });
+      
+      socket.on('reconnect_attempt', (attempt) => {
+        logMessage(`Попытка переподключения #${attempt}`);
+      });
+      
+      socket.on('connected', (data) => {
+        logMessage(`Получено событие "connected": ${JSON.stringify(data)}`, 'success');
+      });
+      
+      socket.on('pong', (data) => {
+        logMessage(`Получен ответ на пинг: ${JSON.stringify(data)}`, 'success');
+      });
+      
+      // Слушаем все события
+      socket.onAny((event, ...args) => {
+        if (event !== 'pong' && event !== 'connected') {
+          logMessage(`Событие ${event}: ${JSON.stringify(args)}`);
+        }
+      });
+    }
+    
+    function sendPing() {
+      if (!socket || !socket.connected) {
+        logMessage('Невозможно отправить пинг: нет соединения', 'error');
+        return;
+      }
+      
+      const pingData = { timestamp: new Date().toISOString() };
+      socket.emit('ping', pingData);
+      logMessage(`Отправлен пинг: ${JSON.stringify(pingData)}`);
+    }
+    
+    // Автоматическое подключение при загрузке страницы
+    window.onload = connect;
+  </script>
+</body>
+</html> 

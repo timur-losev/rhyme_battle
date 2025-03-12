@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Default Card</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: #121212;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+    }
+    
+    .card {
+      width: 240px;
+      height: 340px;
+      background: linear-gradient(135deg, #333 0%, #111 100%);
+      border-radius: 15px;
+      position: relative;
+      box-shadow: 0 10px 20px rgba(0, 0, 0, 0.5);
+      overflow: hidden;
+    }
+    
+    .card::after {
+      content: "?";
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 120px;
+      color: rgba(255, 255, 255, 0.2);
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+  <div class="card"></div>
+</body>
+</html> 
