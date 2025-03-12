@@ -26,7 +26,8 @@ const GameRoom = () => {
     setGameStatus,
     isLoading,
     selectCardsForBattle,
-    startBattle
+    startBattle,
+    throttledGetRoomState
   } = useGame();
   const [copied, setCopied] = useState(false);
   const [playersCount, setPlayersCount] = useState(0);
@@ -42,9 +43,9 @@ const GameRoom = () => {
     if (socket && socket.connected && currentRoom) {
       // Отправляем событие на сервер о выходе из комнаты
       socket.emit('leaveRoom', { roomId: currentRoom, userId: currentUser?.id });
+      // Больше не вызываем resetGame() напрямую, это приводит к цикличным обновлениям
+      // Теперь мы только отправляем событие серверу, а состояние reset будет происходить через эффекты
     }
-    // Сбрасываем состояние игры
-    resetGame();
   };
 
   // Новая функция для принудительной загрузки карт
@@ -85,23 +86,13 @@ const GameRoom = () => {
     }
   }, [cardsCollection]);
 
-  // Функция для получения состояния комнаты
-  const getRoomState = (roomId) => {
-    if (socket && socket.connected && roomId) {
-      console.log(`Запрос состояния комнаты: ${roomId}`);
-      socket.emit('getRoomState', { roomId });
-    } else {
-      console.error('Невозможно запросить состояние комнаты: сокет не подключен или нет ID комнаты');
-    }
-  };
-
   // forceRefreshState перемещена вверх для предотвращения ошибки
-  const forceRefreshState = () => {
+  const forceRefreshState = useCallback(() => {
     if (roomId && currentUser) {
       console.log('Принудительное обновление состояния комнаты');
-      getRoomState(roomId);
+      throttledGetRoomState(roomId);
     }
-  };
+  }, [roomId, currentUser, throttledGetRoomState]);
 
   // Добавление лога на страницу
   const addLog = (message, type = 'info') => {
@@ -130,17 +121,18 @@ const GameRoom = () => {
     joinRoom(roomId);
     
     // Запрос состояния комнаты через небольшую задержку для гарантии обработки подключения
-    setTimeout(() => {
+    const initialUpdateTimer = setTimeout(() => {
       console.log(`Запрос состояния комнаты: ${roomId}`);
-      getRoomState(roomId);
-    }, 500);
+      throttledGetRoomState(roomId);
+    }, 1000); // Увеличиваем задержку до 1 секунды
   
     // Установка обработчика для закрытия соединения при уходе со страницы
     return () => {
       console.log('Пользователь покидает страницу комнаты');
+      clearTimeout(initialUpdateTimer);
       leaveRoom();
     };
-  }, [roomId, currentUser, joinRoom, navigate, setError, socket, currentRoom, resetGame]);
+  }, [roomId, currentUser, joinRoom, navigate, setError, socket, currentRoom]);
   
   // Функция для ручного обновления состояния комнаты
   const refreshRoomState = useCallback(() => {
@@ -152,13 +144,13 @@ const GameRoom = () => {
       if (socketStatus.connected) {
         console.log('Отправка запроса обновления состояния комнаты');
         // Эмитим событие для получения актуального состояния
-        socket.emit('getRoomState', { roomId: currentRoom });
+        throttledGetRoomState(currentRoom);
       } else {
         console.log('Невозможно обновить состояние: сокет не подключен');
         alert('Соединение с сервером потеряно. Попробуйте обновить страницу.');
       }
     }
-  }, [isConnected, currentRoom, diagnoseSockets, socket]);
+  }, [isConnected, currentRoom, diagnoseSockets, socket, throttledGetRoomState]);
 
   // Присоединение к комнате при монтировании - используем useRef для отслеживания уже выполненного действия
   useEffect(() => {
@@ -167,16 +159,15 @@ const GameRoom = () => {
       joinAttempted.current = true; // Отмечаем, что попытка уже была
       joinRoom(roomId);
       
-      // Автоматическое обновление информации о комнате с интервалами
-      const autoUpdateTimers = [
-        setTimeout(() => forceRefreshState(), 1000),
-        setTimeout(() => forceRefreshState(), 3000),
-        setTimeout(() => forceRefreshState(), 7000)
-      ];
+      // Автоматическое обновление информации о комнате - используем один таймер
+      const autoUpdateTimer = setTimeout(() => {
+        console.log('Отложенное обновление состояния комнаты');
+        forceRefreshState();
+      }, 2000); // Оптимальная задержка в 2 секунды
       
       return () => {
-        // Очищаем таймеры при размонтировании компонента
-        autoUpdateTimers.forEach(timer => clearTimeout(timer));
+        // Очищаем таймер при размонтировании компонента
+        clearTimeout(autoUpdateTimer);
       };
     }
   }, [isConnected, roomId, joinRoom, forceRefreshState]);
@@ -199,23 +190,40 @@ const GameRoom = () => {
       if (gameStatus === 'waiting' && gameState.players.length === 2) {
         console.log('Принудительное обновление статуса на selecting_cards');
         setGameStatus('selecting_cards');
-      }
+      } 
     }
   }, [isConnected, roomId, currentRoom, gameState, playersCount, gameStatus, setGameStatus, joinRoom]);
   
-  // Добавляем автоматическое обновление состояния каждые 10 секунд,
+  // Добавляем автоматическое обновление состояния каждые 30 секунд,
   // чтобы гарантировать актуальность данных, особенно для второго игрока
+  const autoUpdateIntervalRef = useRef(null);
+  
   useEffect(() => {
+    // Очищаем предыдущий интервал, если он существует
+    if (autoUpdateIntervalRef.current) {
+      clearInterval(autoUpdateIntervalRef.current);
+      autoUpdateIntervalRef.current = null;
+    }
+    
     if (isConnected && currentRoom && socket) {
       console.log('Настройка периодического обновления состояния комнаты');
-      const intervalId = setInterval(() => {
-        console.log('Автоматическое обновление состояния комнаты');
-        socket.emit('getRoomState', { roomId: currentRoom });
-      }, 10000); // Каждые 10 секунд
       
-      return () => clearInterval(intervalId);
+      // Устанавливаем новый интервал
+      autoUpdateIntervalRef.current = setInterval(() => {
+        console.log('Автоматическое обновление состояния комнаты');
+        throttledGetRoomState(currentRoom); // Используем функцию с throttle из контекста
+      }, 30000); // Каждые 30 секунд
     }
-  }, [isConnected, currentRoom, socket]);
+    
+    // Очистка при размонтировании
+    return () => {
+      if (autoUpdateIntervalRef.current) {
+        console.log('Очистка интервала автоматического обновления');
+        clearInterval(autoUpdateIntervalRef.current);
+        autoUpdateIntervalRef.current = null;
+      }
+    };
+  }, [isConnected, currentRoom, socket, throttledGetRoomState]);
 
   // Обновление интерфейса при изменении gameState
   useEffect(() => {

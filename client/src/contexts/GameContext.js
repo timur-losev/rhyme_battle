@@ -39,10 +39,102 @@ export function GameProvider({ children }) {
   const { currentUser } = useAuth();
   const navigate = useNavigate();
 
+  // Добавляем throttle для запросов состояния комнаты
+  // Эта переменная будет использоваться для отслеживания времени последнего запроса
+  // ВАЖНО: использую переменную во внешней области видимости, доступную всем компонентам
+  const GLOBAL_THROTTLE_STATE = {
+    lastRoomStateRequestTime: 0,
+    pendingRequests: {},
+    minInterval: 5000 // Увеличиваем минимальный интервал до 5 секунд для большей эффективности
+  };
+  
+  // Создаю дебаунсер для запросов состояния комнаты
+  let roomStateRequestQueue = {};
+  let roomStateRequestTimer = null;
+  
+  // Функция-дебаунсер, которая будет собирать запросы и отправлять только один
+  const debouncedGetRoomState = (roomId) => {
+    if (!roomId) return false;
+    
+    // Добавляем запрос в очередь
+    roomStateRequestQueue[roomId] = Date.now();
+    
+    // Если таймер уже установлен, не создаем новый
+    if (roomStateRequestTimer) return false;
+    
+    // Устанавливаем таймер для обработки накопленных запросов
+    roomStateRequestTimer = setTimeout(() => {
+      // Находим самый свежий запрос в очереди
+      const requests = Object.keys(roomStateRequestQueue);
+      if (requests.length > 0) {
+        // Если в очереди несколько запросов, логируем это
+        if (requests.length > 1) {
+          console.log(`Объединяем ${requests.length} запросов состояния комнаты в один`);
+        }
+        
+        // Отправляем только самый свежий запрос
+        const latestRoomId = requests[requests.length - 1];
+        throttledGetRoomState(latestRoomId);
+      }
+      
+      // Очищаем очередь и таймер
+      roomStateRequestQueue = {};
+      roomStateRequestTimer = null;
+    }, 100); // Короткая задержка для группировки близких по времени запросов
+    
+    return true;
+  };
+
+  // Функция для проверки и запроса состояния комнаты с ограничением частоты
+  const throttledGetRoomState = (roomId) => {
+    if (!roomId || !socket || !socket.connected) {
+      console.log('Невозможно запросить состояние: нет ID комнаты или соединения');
+      return false;
+    }
+    
+    const now = Date.now();
+    const lastRequestForRoom = GLOBAL_THROTTLE_STATE.pendingRequests[roomId] || 0;
+    const globalLastRequest = GLOBAL_THROTTLE_STATE.lastRoomStateRequestTime;
+    const timeSinceRoomRequest = now - lastRequestForRoom;
+    const timeSinceGlobalRequest = now - globalLastRequest;
+    
+    // Используем более строгое ограничение - проверяем как глобальное время, так и время для конкретной комнаты
+    if (timeSinceRoomRequest > GLOBAL_THROTTLE_STATE.minInterval && 
+        timeSinceGlobalRequest > 1000) { // Минимум 1 секунда между любыми запросами
+      
+      console.log(`Отправка запроса getRoomState для ${roomId} (интервал: ${timeSinceRoomRequest}мс)`);
+      
+      // Обновляем оба счетчика перед отправкой запроса
+      GLOBAL_THROTTLE_STATE.lastRoomStateRequestTime = now;
+      GLOBAL_THROTTLE_STATE.pendingRequests[roomId] = now;
+      
+      // Отправляем запрос
+      socket.emit('getRoomState', { roomId });
+      return true;
+    } else {
+      console.log(`Запрос getRoomState пропущен для ${roomId} - слишком частые запросы (${timeSinceRoomRequest}мс)`);
+      return false;
+    }
+  };
+
+  // Переменная для хранения глобального состояния соединения
+  const GLOBAL_SOCKET_STATE = {
+    activeConnections: 0,
+    maxConnections: 1, // Разрешаем только одно активное соединение
+    lastSocketId: null
+  };
+
   // Инициализация сокета при монтировании компонента
   useEffect(() => {
     if (currentUser && !socket) {
       console.log('Инициализация сокета для пользователя:', currentUser.id);
+      
+      // Проверяем, сколько активных соединений уже существует
+      if (GLOBAL_SOCKET_STATE.activeConnections >= GLOBAL_SOCKET_STATE.maxConnections) {
+        console.warn('Превышено максимальное количество соединений!');
+        console.warn('Существующий сокет:', GLOBAL_SOCKET_STATE.lastSocketId);
+        return; // Прерываем создание нового соединения
+      }
       
       try {
         // Создаем новый сокет с базовыми параметрами - так же, как в работающей тестовой странице
@@ -54,11 +146,19 @@ export function GameProvider({ children }) {
           autoConnect: false // Важно: отключаем автоподключение
         });
         
+        // Регистрируем соединение
+        GLOBAL_SOCKET_STATE.activeConnections++;
+        
+        // Явно маркируем сокет, что он новый и требует настройки слушателей
+        newSocket._listenersInitialized = false;
+        
         console.log('Socket.io создан, подключаем...');
         
         // Устанавливаем обработчики до подключения
         newSocket.on('connect', () => {
           console.log('Socket.io ПОДКЛЮЧЕН! SocketID:', newSocket.id);
+          // Сохраняем ID сокета
+          GLOBAL_SOCKET_STATE.lastSocketId = newSocket.id;
           setIsConnected(true);
         });
         
@@ -74,6 +174,8 @@ export function GameProvider({ children }) {
         // Добавляем обработчик дисконнекта здесь тоже
         newSocket.on('disconnect', (reason) => {
           console.log('Соединение с сервером разорвано. Причина:', reason);
+          // Уменьшаем счетчик активных соединений
+          GLOBAL_SOCKET_STATE.activeConnections = Math.max(0, GLOBAL_SOCKET_STATE.activeConnections - 1);
           setIsConnected(false);
         });
         
@@ -90,7 +192,9 @@ export function GameProvider({ children }) {
         
         return () => {
           console.log('Отключение сокета');
+          // Отключаем сокет и уменьшаем счетчик активных соединений
           newSocket.disconnect();
+          GLOBAL_SOCKET_STATE.activeConnections = Math.max(0, GLOBAL_SOCKET_STATE.activeConnections - 1);
         };
       } catch (err) {
         console.error('Критическая ошибка при создании Socket.io:', err);
@@ -120,6 +224,36 @@ export function GameProvider({ children }) {
   // Настройка слушателей сокета
   useEffect(() => {
     if (!socket) return;
+    
+    // Проверяем, были ли уже инициализированы слушатели
+    if (socket._listenersInitialized) {
+      console.log('Слушатели уже настроены, пропускаем повторную настройку');
+      return;
+    }
+    
+    // Предотвращаем множественные установки слушателей
+    // Сначала удаляем все существующие обработчики
+    socket.off('connected');
+    socket.off('error');
+    socket.off('pong');
+    socket.off('roomCreated');
+    socket.off('leftRoom');
+    socket.off('joinedRoom');
+    socket.off('roomState');
+    socket.off('joinRoomError');
+    socket.off('playerJoined');
+    socket.off('cardsSelected');
+    socket.off('playerReady');
+    socket.off('battleStart');
+    socket.off('cardPlayed');
+    socket.off('turnEnded');
+    socket.off('specialEvent');
+    socket.off('gameEnded');
+    socket.off('playerDisconnected');
+    socket.off('roomChecked');
+    socket.off('gameStatusUpdate');
+    
+    console.log('🔄 Настройка слушателей Socket.io');
     
     // Тестовое событие от сервера
     socket.on('connected', (data) => {
@@ -151,6 +285,13 @@ export function GameProvider({ children }) {
       navigate(`/game/${data.roomId}`);
     });
     
+    // Выход из комнаты (новый обработчик)
+    socket.on('leftRoom', (data) => {
+      console.log('Выход из комнаты подтвержден сервером:', data);
+      // Сбрасываем состояние только когда получаем подтверждение от сервера
+      resetGame();
+    });
+    
     // Присоединение к комнате
     socket.on('joinedRoom', (data) => {
       console.log('Присоединились к комнате:', data);
@@ -176,17 +317,16 @@ export function GameProvider({ children }) {
         console.log('Карты уже загружены или загружаются, пропускаем запрос при joinedRoom');
       }
       
-      // Запрашиваем состояние комнаты несколько раз с разной задержкой для надежности
+      // Запрашиваем состояние комнаты единожды после присоединения
       if (data.roomId) {
         console.log('Запрашиваем актуальное состояние комнаты после присоединения');
-        [0, 500, 1500].forEach(delay => {
-          setTimeout(() => {
-            if (socket && socket.connected) {
-              console.log(`Запрос состояния комнаты с задержкой ${delay}мс после присоединения`);
-              socket.emit('getRoomState', { roomId: data.roomId });
-            }
-          }, delay);
-        });
+        // Запрашиваем состояние комнаты только один раз с небольшой задержкой
+        setTimeout(() => {
+          if (socket && socket.connected) {
+            console.log('Запрос состояния комнаты после присоединения');
+            debouncedGetRoomState(data.roomId);
+          }
+        }, 500);
       }
       
       // Если вторым игроком присоединились к игре в процессе боя
@@ -252,16 +392,13 @@ export function GameProvider({ children }) {
       if (currentRoom) {
         console.log('Запрашиваем обновление состояния при присоединении игрока');
         
-        // Используем несколько попыток запроса состояния с разными интервалами
-        // для гарантированного обновления интерфейса
-        [100, 500, 1500].forEach(delay => {
-          setTimeout(() => {
-            if (socket && socket.connected) {
-              console.log(`Запрос состояния комнаты с задержкой ${delay}мс`);
-              socket.emit('getRoomState', { roomId: currentRoom });
-            }
-          }, delay);
-        });
+        // Используем один запрос с оптимальной задержкой
+        setTimeout(() => {
+          if (socket && socket.connected) {
+            console.log('Запрос состояния комнаты после присоединения игрока');
+            debouncedGetRoomState(currentRoom);
+          }
+        }, 500);
       }
       
       // Обновляем статус игры, только если находимся в статусе ожидания
@@ -337,7 +474,7 @@ export function GameProvider({ children }) {
       // Запрашиваем обновление состояния комнаты
       if (socket && socket.connected && currentRoom) {
         console.log('Запрашиваем обновление состояния комнаты после подтверждения выбора карт');
-        socket.emit('getRoomState', { roomId: currentRoom });
+        debouncedGetRoomState(currentRoom);
       }
     });
     
@@ -462,6 +599,9 @@ export function GameProvider({ children }) {
       socket.off('roomChecked');
       socket.off('gameStatusUpdate'); // Отписываемся от нового события
     };
+    
+    // Устанавливаем флаг, что слушатели были инициализированы
+    socket._listenersInitialized = true;
   }, [socket, navigate, currentUser?.id, currentRoom, gameStatus]);
 
   // Сохраняем currentRoom в localStorage при его изменении
@@ -782,7 +922,7 @@ export function GameProvider({ children }) {
       // Запрашиваем актуальное состояние комнаты для синхронизации
       if (socket && socket.connected) {
         console.log('Отправляем запрос на получение актуального состояния комнаты');
-        socket.emit('getRoomState', { roomId });
+        debouncedGetRoomState(roomId);
       }
       return;
     }
@@ -796,15 +936,13 @@ export function GameProvider({ children }) {
     // Эмитим событие присоединения к комнате
     socket.emit('joinRoom', { roomId, userId: currentUser.id });
     
-    // Инициируем несколько запросов состояния комнаты с задержкой
-    [500, 1500, 3000].forEach(delay => {
-      setTimeout(() => {
-        if (socket && socket.connected) {
-          console.log(`Дополнительный запрос состояния комнаты с задержкой ${delay}мс`);
-          socket.emit('getRoomState', { roomId });
-        }
-      }, delay);
-    });
+    // Инициируем только один запрос состояния комнаты с задержкой
+    setTimeout(() => {
+      if (socket && socket.connected) {
+        console.log('Запрос состояния комнаты после присоединения с оптимальной задержкой');
+        debouncedGetRoomState(roomId);
+      }
+    }, 1000); // Оптимальная задержка в 1 секунду
   };
 
   // Выбор карт для боя
@@ -931,7 +1069,7 @@ export function GameProvider({ children }) {
       setTimeout(() => {
         if (socket && socket.connected) {
           console.log('GameContext: Запрос обновления состояния комнаты после выбора карт');
-          socket.emit('getRoomState', { roomId: currentRoom });
+          debouncedGetRoomState(currentRoom);
         }
       }, 1000);
       
@@ -1059,7 +1197,8 @@ export function GameProvider({ children }) {
     diagnoseSockets,
     reconnectSocket,
     socket,
-    setGameStatus
+    setGameStatus,
+    throttledGetRoomState: debouncedGetRoomState
   };
 
   return (
