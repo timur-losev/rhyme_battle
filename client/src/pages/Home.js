@@ -1,153 +1,148 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useGame } from '../contexts/GameContext';
+import './Home.css';
 
 function Home() {
   const { currentUser } = useAuth();
-  const { createRoom, loadCards, cardsCollection, error, isConnected } = useGame();
+  const { createRoom, joinRoom, currentRoom, loading, error } = useGame();
   const navigate = useNavigate();
-
-  // Загрузка карт при монтировании компонента
+  const [roomIdInput, setRoomIdInput] = useState('');
+  const [savedRoom, setSavedRoom] = useState(localStorage.getItem('currentRoom'));
+  
+  // Проверяем наличие сохраненной комнаты при загрузке компонента
   useEffect(() => {
-    // Принудительно загружаем карты для тестирования
-    if (cardsCollection.length === 0) {
-      console.log('Home: Автоматическая загрузка карт');
-      loadCards().then(cards => {
-        console.log(`Home: Загружено ${cards?.length || 0} тестовых карт`);
-      });
-    } else {
-      console.log(`Home: Карты уже загружены (${cardsCollection.length} штук)`);
+    // Получаем сохраненную комнату из localStorage
+    const savedRoomId = localStorage.getItem('currentRoom');
+    if (savedRoomId) {
+      console.log('Обнаружена сохраненная комната:', savedRoomId);
+      setSavedRoom(savedRoomId);
     }
   }, []);
   
-  // Функция для создания новой комнаты
   const handleCreateRoom = () => {
     if (!currentUser) {
-      console.log('Невозможно создать комнату: пользователь не авторизован');
       navigate('/login');
       return;
     }
-    
-    console.log('Создание новой комнаты...');
     createRoom();
   };
-  
-  // Функция для перехода к просмотру карт (тестирование)
-  const handleViewCards = () => {
-    console.log('Переход к просмотру карт...');
+
+  const handleJoinRoom = (e) => {
+    e.preventDefault();
+    if (!currentUser) {
+      navigate('/login');
+      return;
+    }
+    if (roomIdInput.trim()) {
+      joinRoom(roomIdInput);
+    }
+  };
+
+  // Обработчик для возвращения в сохраненную комнату
+  const handleReturnToRoom = () => {
+    if (savedRoom) {
+      console.log('Возвращаемся в сохраненную комнату:', savedRoom);
+      navigate(`/game/${savedRoom}`);
+    }
+  };
+
+  // Обработчик для перехода к тестированию карт
+  const handleViewTestCards = () => {
+    console.log('Переход к тестированию карт...');
     navigate('/test-cards');
   };
 
   return (
-    <div className="w-full max-w-4xl mx-auto">
-      <div className="text-center mb-12">
-        <h1 className="text-5xl font-bold mb-4 text-transparent bg-clip-text bg-gradient-to-r from-purple-400 via-pink-500 to-red-500">
-          Баттл Рэп Ритмов
-        </h1>
-        <p className="text-xl text-gray-300 mb-8">
-          Собери свою колоду, сразись с противниками и стань лучшим мастером рэп-баттлов!
-        </p>
+    <div className="home-container">
+      <div className="hero-section">
+        <h1>Rhyme Battle</h1>
+        <p className="tagline">Состязание в искусстве рифмы и ритма</p>
         
-        {/* Статус загрузки карт */}
-        <div className="mb-4 text-sm bg-gray-800 inline-block px-4 py-2 rounded-lg">
-          <p>Статус соединения: {isConnected ? (
-            <span className="text-green-400">Подключено</span>
-          ) : (
-            <span className="text-red-400">Не подключено</span>
-          )}</p>
-          <p>Карты: {cardsCollection.length > 0 ? (
-            <span className="text-green-400">Загружено {cardsCollection.length} карт</span>
-          ) : (
-            <span className="text-yellow-400">Не загружены</span>
-          )}</p>
-          {error && <p className="text-red-400">Ошибка: {error}</p>}
-        </div>
+        {savedRoom && (
+          <div className="saved-room-notification">
+            <p>У вас есть активная игровая комната</p>
+            <button 
+              className="btn btn-primary" 
+              onClick={handleReturnToRoom}
+            >
+              Вернуться в комнату
+            </button>
+          </div>
+        )}
         
-        <div className="flex flex-col sm:flex-row justify-center gap-4 mb-8">
-          {currentUser ? (
-            <button
+        {currentUser ? (
+          <div className="action-buttons">
+            <button 
+              className="btn btn-primary" 
               onClick={handleCreateRoom}
-              className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-6 rounded-lg transition-colors duration-300 flex-1 max-w-xs mx-auto"
+              disabled={loading}
             >
               Создать комнату
             </button>
-          ) : (
-            <Link 
-              to="/login" 
-              className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-6 rounded-lg transition-colors duration-300 flex-1 max-w-xs mx-auto flex items-center justify-center"
-            >
-              Войти в игру
-            </Link>
-          )}
-          
-          {/* Кнопка для тестирования карт */}
-          <button
-            onClick={handleViewCards}
-            className="bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-lg transition-colors duration-300 flex-1 max-w-xs mx-auto"
-          >
-            Просмотр тестовых карт
-          </button>
-        </div>
+            
+            <form onSubmit={handleJoinRoom} className="join-room-form">
+              <input
+                type="text"
+                placeholder="Введите ID комнаты"
+                value={roomIdInput}
+                onChange={(e) => setRoomIdInput(e.target.value)}
+                className="room-input"
+              />
+              <button 
+                type="submit" 
+                className="btn btn-secondary"
+                disabled={loading || !roomIdInput.trim()}
+              >
+                Присоединиться
+              </button>
+            </form>
+            
+            {error && <p className="error-message">{error}</p>}
+          </div>
+        ) : (
+          <div className="login-prompt">
+            <p>Чтобы создать комнату или присоединиться к игре, необходимо войти в аккаунт</p>
+            <Link to="/login" className="btn btn-primary">Войти</Link>
+            <Link to="/register" className="btn btn-outline">Регистрация</Link>
+          </div>
+        )}
         
-        {/* Тестовый блок с информацией о количестве загруженных карт */}
-        <div className="bg-gray-800 p-4 rounded-lg mb-8">
-          <h2 className="text-xl font-bold mb-2">Состояние тестовых карт</h2>
-          {cardsCollection.length > 0 ? (
-            <div className="text-green-400">
-              <p>✅ Тестовые карты успешно загружены!</p>
-              <p>Количество карт: {cardsCollection.length}</p>
-              <p className="text-sm text-gray-400 mt-1">
-                (Нажмите кнопку "Просмотр тестовых карт" для отображения)
-              </p>
-            </div>
-          ) : (
-            <div className="text-yellow-400">
-              <p>⚠️ Тестовые карты еще не загружены</p>
-              <p className="text-sm text-gray-400 mt-1">
-                При переходе к просмотру карт они будут загружены автоматически
-              </p>
-            </div>
-          )}
+        {/* Добавляем кнопку тестирования карт */}
+        <div className="test-cards-section" style={{ marginTop: '20px' }}>
+          <button 
+            className="btn btn-secondary" 
+            onClick={handleViewTestCards}
+            style={{ 
+              backgroundColor: '#6b46c1', 
+              borderColor: '#553c9a',
+              padding: '10px 20px'
+            }}
+          >
+            Тестирование карт
+          </button>
+          <p style={{ fontSize: '0.8rem', color: '#a0aec0', marginTop: '5px' }}>
+            Просмотр и тестирование всех доступных карт
+          </p>
         </div>
       </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-        <div className="bg-gray-800 rounded-lg p-6">
-          <h2 className="text-2xl font-bold mb-4">Как играть?</h2>
-          <ol className="list-decimal pl-5 space-y-2">
-            <li>Создайте новую комнату или присоединитесь к существующей</li>
-            <li>Выберите 5 карт для баттла из своей коллекции</li>
-            <li>По очереди разыгрывайте карты против оппонента</li>
-            <li>Используйте комбинации и специальные эффекты</li>
-            <li>Побеждает игрок, который наберет больше очков!</li>
-          </ol>
-        </div>
-        
-        <div className="bg-gray-800 rounded-lg p-6">
-          <h2 className="text-2xl font-bold mb-4">Типы карт</h2>
-          <ul className="space-y-3">
-            <li className="flex items-center">
-              <span className="w-3 h-3 bg-red-500 rounded-full mr-2"></span>
-              <span className="font-bold text-red-400 mr-2">Атака:</span>
-              <span>Наносит урон противнику</span>
-            </li>
-            <li className="flex items-center">
-              <span className="w-3 h-3 bg-blue-500 rounded-full mr-2"></span>
-              <span className="font-bold text-blue-400 mr-2">Защита:</span>
-              <span>Блокирует урон от атак противника</span>
-            </li>
-            <li className="flex items-center">
-              <span className="w-3 h-3 bg-purple-500 rounded-full mr-2"></span>
-              <span className="font-bold text-purple-400 mr-2">Комбо:</span>
-              <span>Позволяет разыграть дополнительные карты</span>
-            </li>
-            <li className="flex items-center">
-              <span className="w-3 h-3 bg-yellow-500 rounded-full mr-2"></span>
-              <span className="font-bold text-yellow-400 mr-2">Специальные:</span>
-              <span>Уникальные эффекты, меняющие ход игры</span>
-            </li>
-          </ul>
+      
+      <div className="features-section">
+        <h2>Как играть</h2>
+        <div className="features-grid">
+          <div className="feature-card">
+            <h3>Создайте комнату</h3>
+            <p>Создайте игровую комнату и пригласите друга, отправив ему ID комнаты.</p>
+          </div>
+          <div className="feature-card">
+            <h3>Выберите карты</h3>
+            <p>Каждый игрок выбирает карты со словами и рифмами для своей колоды.</p>
+          </div>
+          <div className="feature-card">
+            <h3>Сражайтесь</h3>
+            <p>Используйте свои карты, чтобы создать лучшие рифмы и победить оппонента.</p>
+          </div>
         </div>
       </div>
     </div>

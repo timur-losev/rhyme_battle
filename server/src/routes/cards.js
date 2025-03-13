@@ -9,26 +9,37 @@ const CACHE_DURATION = 5 * 60 * 1000; // 5 минут в миллисекунд�
 
 // Получить все карты
 router.get('/', async (req, res) => {
+  console.log(`[${new Date().toISOString()}] API запрос на получение всех карт. IP: ${req.ip}, User-Agent: ${req.get('User-Agent')}`);
+  
   try {
     // Проверяем, есть ли актуальные данные в кэше
     const now = Date.now();
     if (cardsCache && lastCacheTime && (now - lastCacheTime < CACHE_DURATION)) {
-      console.log('Отдаём карты из кэша');
+      console.log(`[${new Date().toISOString()}] Отдаём ${cardsCache.length} карт из кэша`);
       return res.json(cardsCache);
     }
     
     // Если кэша нет или он устарел, запрашиваем из базы
-    console.log('Загрузка карт из базы данных');
+    console.log(`[${new Date().toISOString()}] Загрузка карт из базы данных`);
     const cards = await Card.find();
     
     // Обновляем кэш
     cardsCache = cards;
     lastCacheTime = now;
     
-    console.log(`Загружено ${cards.length} карт из базы данных`);
+    console.log(`[${new Date().toISOString()}] Загружено ${cards.length} карт из базы данных`);
+    
+    // В режиме отладки выводим информацию о первых 2 картах
+    if (process.env.DEBUG) {
+      console.log('Пример карт:');
+      cards.slice(0, 2).forEach((card, index) => {
+        console.log(`Карта ${index + 1}:`, JSON.stringify(card, null, 2));
+      });
+    }
+    
     res.json(cards);
   } catch (err) {
-    console.error('Ошибка при получении карт:', err);
+    console.error(`[${new Date().toISOString()}] Ошибка при получении карт:`, err);
     res.status(500).json({ message: err.message });
   }
 });

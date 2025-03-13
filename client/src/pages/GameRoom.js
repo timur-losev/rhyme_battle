@@ -52,8 +52,31 @@ const GameRoom = () => {
   const forceLoadCards = async () => {
     console.log('GameRoom: Принудительная загрузка карт');
     try {
+      // Выводим более подробную информацию о контексте
+      console.log('Состояние перед загрузкой карт:');
+      console.table({
+        'ID комнаты': currentRoom || 'Нет',
+        'ID пользователя': currentUser?.id || 'Нет',
+        'Статус': gameStatus || 'Неизвестно',
+        'Текущие карты': cardsCollection?.length || 0
+      });
+      
+      // Проверяем и логируем наличие функции loadCards
+      if (!loadCards || typeof loadCards !== 'function') {
+        console.error('GameRoom: Функция loadCards недоступна!', { loadCards });
+        return null;
+      }
+      
+      // Вызываем загрузку карт с явным обозначением области видимости (this)
       const cards = await loadCards();
+      
       console.log(`GameRoom: Загружено ${cards?.length || 0} карт`);
+      
+      // Проверяем успешность загрузки
+      if (!cards || cards.length === 0) {
+        console.error('GameRoom: Карты не были загружены!');
+      }
+      
       return cards;
     } catch (err) {
       console.error('GameRoom: Ошибка загрузки карт:', err);
@@ -88,11 +111,25 @@ const GameRoom = () => {
 
   // forceRefreshState перемещена вверх для предотвращения ошибки
   const forceRefreshState = useCallback(() => {
-    if (roomId && currentUser) {
-      console.log('Принудительное обновление состояния комнаты');
-      throttledGetRoomState(roomId);
+    console.log('Принудительное обновление состояния комнаты');
+    
+    if (!currentRoom) {
+      console.error('Невозможно обновить состояние: ID комнаты не определен');
+      return;
     }
-  }, [roomId, currentUser, throttledGetRoomState]);
+    
+    if (!socket || !socket.connected) {
+      console.error('Невозможно обновить состояние: отсутствует соединение с сервером');
+      return;
+    }
+    
+    try {
+      console.log(`Отправляем getRoomState для комнаты ${currentRoom}`);
+      socket.emit('getRoomState', { roomId: currentRoom });
+    } catch (err) {
+      console.error('Ошибка при запросе состояния комнаты:', err);
+    }
+  }, [currentRoom, socket]);
 
   // Добавление лога на страницу
   const addLog = (message, type = 'info') => {
@@ -287,7 +324,26 @@ const GameRoom = () => {
   
   // Отдельный эффект для проверки необходимости загрузки карт
   useEffect(() => {
-    if (gameStatus === 'battle' && cardsCollection.length === 0 && !loading) {
+    // Явно загружаем карты при монтировании компонента, независимо от статуса
+    console.log('GameRoom: Проверка наличия карт. Статус:', gameStatus, 'Карт:', cardsCollection.length);
+    
+    if (cardsCollection.length === 0 && !loading) {
+      console.log('GameRoom: Выполняю принудительную загрузку карт');
+      loadCards().then(cards => {
+        console.log(`GameRoom: Загружено ${cards?.length || 0} карт`);
+      }).catch(err => {
+        console.error('GameRoom: Ошибка загрузки карт:', err);
+      });
+    } else {
+      console.log(`GameRoom: Карты уже загружены (${cardsCollection.length} шт.)`);
+    }
+  }, []);
+  
+  // Дополнительная проверка загрузки карт при изменении статуса
+  useEffect(() => {
+    if ((gameStatus === 'battle' || gameStatus === 'selecting_cards' || gameStatus === 'cards_selection') 
+        && cardsCollection.length === 0 && !loading) {
+      console.log('GameRoom: Загружаем карты после изменения статуса игры на:', gameStatus);
       loadCards();
     }
   }, [gameStatus, cardsCollection.length, loading, loadCards]);
@@ -331,7 +387,95 @@ const GameRoom = () => {
   }
 
   return (
-    <div className="container mx-auto px-4">
+    <div className="game-room">
+      {/* Отладочная информация для тестирования */}
+      <div className="mt-8 p-4 bg-red-900 text-white rounded-lg border-2 border-red-600">
+        <h3 className="text-xl font-bold mb-2">⚠️ ОТЛАДОЧНАЯ ИНФОРМАЦИЯ</h3>
+        <div className="grid grid-cols-2 gap-2 mb-4">
+          <div>
+            <p><strong>ID комнаты:</strong> {currentRoom || 'не выбрана'}</p>
+            <p><strong>Статус игры:</strong> {gameStatus || 'не определен'}</p>
+            <p><strong>Карты загружены:</strong> {cardsCollection && cardsCollection.length > 0 ? '✅ Да' : '❌ Нет'}</p>
+            <p><strong>Количество карт:</strong> {cardsCollection?.length || 0}</p>
+            <p><strong>Загрузка:</strong> {loading ? '⏳ В процессе' : '✅ Завершена'}</p>
+          </div>
+          <div>
+            <p><strong>Соединение:</strong> {socket?.connected ? '✅ Есть' : '❌ Нет'}</p>
+            <p><strong>ID сокета:</strong> {socket?.id || 'нет'}</p>
+            <p><strong>Игрок готов:</strong> {playerReady ? '✅ Да' : '❌ Нет'}</p>
+            <p><strong>Ошибки:</strong> {error ? '❌ ' + error : '✅ Нет'}</p>
+            <p><strong>Время:</strong> {new Date().toLocaleTimeString()}</p>
+          </div>
+        </div>
+        
+        <div className="mt-4 flex space-x-4">
+          <button
+            onClick={(e) => {
+              e.preventDefault(); // Предотвращаем стандартное поведение
+              e.stopPropagation(); // Останавливаем всплытие события
+              console.log('Нажата кнопка загрузки карт в отладочном блоке');
+              
+              // Явно вызываем forceLoadCards вместо loadCards
+              forceLoadCards().then(cards => {
+                console.log(`Загружено ${cards?.length || 0} карт через кнопку отладки`);
+              }).catch(err => {
+                console.error('Ошибка загрузки карт через кнопку отладки:', err);
+              });
+            }}
+            className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded text-sm"
+          >
+            Загрузить карты
+          </button>
+          <button
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              console.log('Нажата кнопка обновления состояния');
+              if (socket && socket.connected && currentRoom) {
+                socket.emit('getRoomState', { roomId: currentRoom });
+                console.log(`Отправлен запрос состояния для комнаты ${currentRoom}`);
+              } else {
+                console.error('Невозможно обновить состояние: отсутствует соединение или ID комнаты');
+              }
+            }}
+            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded text-sm"
+          >
+            Обновить состояние
+          </button>
+          <button
+            onClick={() => window.location.reload()}
+            className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded text-sm"
+          >
+            Перезагрузить страницу
+          </button>
+        </div>
+      </div>
+      
+      {/* Основной контент */}
+      <div className="flex flex-col md:flex-row justify-between items-start mb-6">
+        <h1 className="text-3xl font-bold">Игровая комната</h1>
+        <div className="mt-4 md:mt-0 flex items-center space-x-4">
+          <button
+            className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded transition-colors"
+            onClick={handleLeaveGame}
+          >
+            Выйти из игры
+          </button>
+          <div className="flex items-center">
+            <span className="text-gray-400 mr-2">ID комнаты:</span>
+            <div className="relative">
+              <span className="bg-gray-800 px-3 py-1 rounded">{roomId}</span>
+              <button
+                className="ml-2 bg-blue-600 hover:bg-blue-700 text-white px-2 py-1 rounded text-sm"
+                onClick={copyRoomId}
+              >
+                {copied ? 'Скопировано!' : 'Копировать'}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
       {/* Заголовок комнаты и статус */}
       <div className="bg-gray-800 rounded-lg p-6 mb-8">
         <div className="flex flex-wrap justify-between items-center mb-4">

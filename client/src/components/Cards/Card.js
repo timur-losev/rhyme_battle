@@ -17,6 +17,20 @@ const rarityStyles = {
 };
 
 const Card = ({ card, isSelected, isPlayable, onClick, className }) => {
+  // Проверка наличия всех необходимых свойств карты
+  if (!card || !card._id || !card.name || !card.type) {
+    console.error('Получена некорректная карта:', card);
+    return (
+      <div className="card relative w-full max-w-xs rounded-lg overflow-hidden bg-red-800 text-white p-4 m-2">
+        <p className="font-bold">Ошибка карты</p>
+        <p className="text-sm">Карта не содержит необходимых данных</p>
+        <pre className="mt-2 text-xs bg-red-900 p-2 rounded overflow-auto">
+          {JSON.stringify(card || 'null', null, 2)}
+        </pre>
+      </div>
+    );
+  }
+
   const handleClick = () => {
     if (onClick) {
       onClick(card);
@@ -69,6 +83,11 @@ const Card = ({ card, isSelected, isPlayable, onClick, className }) => {
       `}
       onClick={() => isPlayable && onClick && onClick(card)}
     >
+      {/* Отладочная информация */}
+      <div className="absolute top-0 left-0 right-0 bg-black bg-opacity-70 p-1 text-xs text-white z-10">
+        ID: {card._id ? card._id.substring(0, 8) + '...' : 'нет'}
+      </div>
+      
       {/* Заголовок карты */}
       <div className="card-header p-3 border-b border-gray-600 bg-black bg-opacity-50">
         <div className="flex justify-between items-center">

@@ -1,0 +1,5 @@
+[33mcommit 3b756d9fc64502711639d481a74f2e0a03bdc906[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m)[m
+Author: Timur Losev <timur.losev@boolatplay.com>
+Date:   Thu Mar 13 01:58:54 2025 +0100
+
+    fix: исправлена ошибка условных хуков в App.js и заменен powershell на pwsh в документации
