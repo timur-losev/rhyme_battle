@@ -155,63 +155,99 @@ class GameService {
   }
 
   // Выбор карт игроком
-  selectCards(roomId, userId, cardIds) {
-    const game = this.games.get(roomId);
+  async selectCards(roomId, userId, cards) {
+    console.log(`GameService.selectCards: Выбор карт для игрока ${userId} в комнате ${roomId}`);
 
-    if (!game) {
-      return { success: false, message: 'Игра не найдена' };
-    }
-
-    const playerIndex = game.players.findIndex(player => player.userId === userId);
-
-    if (playerIndex === -1) {
-      return { success: false, message: 'Игрок не найден' };
-    }
-
-    console.log('GameService: Выбор карт для игрока:', userId, 'Карты:', cardIds);
-
-    // Обновление выбранных карт в памяти
-    game.players[playerIndex].selectedCards = cardIds;
-    game.players[playerIndex].isReady = true;
-
-    // Обновление в БД
-    Game.findOne({ roomId }).then(gameDoc => {
-      try {
-        // Проверяем формат cardIds и обрабатываем тестовые карты
-        const processedCardIds = cardIds.map(cardId => {
-          // Если ID начинается с 'test-card-', создаем его как особый ObjectId
-          // Для MongoDB _id может быть или ObjectId, или любым другим типом данных, указанным в схеме
-          if (typeof cardId === 'string' && (cardId.startsWith('test-card-') || cardId.startsWith('emergency-card-'))) {
-            console.log('Обрабатываем тестовую карту:', cardId);
-            // Используем специальную конверсию для тестовых карт
-            // Так как это тест, мы можем использовать специальные строки как id
-            // Они будут обрабатываться отдельно в логике игры
-            return cardId;
-          }
-          // В противном случае, пытаемся преобразовать в ObjectId
-          try {
-            return new mongoose.Types.ObjectId(cardId);
-          } catch (err) {
-            console.error('Ошибка при преобразовании ID карты:', cardId, err);
-            // Возвращаем исходное значение, если не удалось преобразовать
-            return cardId;
-          }
-        });
-
-        console.log('Преобразованные ID карт:', processedCardIds);
-
-        // Используем обработанные ID карт
-        gameDoc.players[playerIndex].selectedCards = processedCardIds;
-        gameDoc.players[playerIndex].isReady = true;
-        gameDoc.save()
-          .then(() => console.log('Карты успешно сохранены для игрока', userId))
-          .catch(err => console.error('Ошибка при сохранении выбранных карт:', err));
-      } catch (err) {
-        console.error('Ошибка при обработке выбранных карт:', err);
+    try {
+      // Проверяем, что все необходимые данные переданы
+      if (!roomId || !userId || !cards || !Array.isArray(cards)) {
+        console.error('GameService.selectCards: Некорректные данные для выбора карт');
+        return { success: false, message: 'Некорректные данные для выбора карт' };
       }
-    });
 
-    return { success: true };
+      // Проверяем существование игры
+      const game = this.games.get(roomId);
+      if (!game) {
+        console.error(`GameService.selectCards: Игра с ID ${roomId} не найдена`);
+        return { success: false, message: 'Игра не найдена' };
+      }
+
+      // Проверяем наличие игрока
+      const playerIndex = game.players.findIndex(p => p.userId === userId);
+      if (playerIndex === -1) {
+        console.error(`GameService.selectCards: Игрок ${userId} не найден в игре ${roomId}`);
+        return { success: false, message: 'Игрок не найден в указанной игре' };
+      }
+
+      // Проверяем количество карт
+      if (cards.length !== this.REQUIRED_CARDS_COUNT) {
+        console.error(`GameService.selectCards: Неверное количество карт (${cards.length}), ожидается ${this.REQUIRED_CARDS_COUNT}`);
+        return {
+          success: false,
+          message: `Необходимо выбрать ${this.REQUIRED_CARDS_COUNT} карт`
+        };
+      }
+
+      // Сохраняем выбранные карты и отмечаем игрока как готового
+      console.log(`GameService.selectCards: Сохраняем карты для игрока ${userId}`);
+
+      // Принудительно обновляем состояние игрока
+      game.players[playerIndex].selectedCards = [...cards];
+      game.players[playerIndex].isReady = true;
+
+      // Текущее время для логирования
+      const timestamp = new Date().toISOString();
+
+      // Сохраняем в БД
+      try {
+        console.log(`GameService.selectCards: Сохраняем карты в БД для игрока ${userId}`);
+
+        // Обновляем документ игры в MongoDB
+        await this.db.collection('games').updateOne(
+          { _id: roomId },
+          {
+            $set: {
+              [`players.${playerIndex}.selectedCards`]: cards,
+              [`players.${playerIndex}.isReady`]: true,
+              [`players.${playerIndex}.readyTimestamp`]: timestamp,
+              lastUpdated: timestamp
+            }
+          }
+        );
+
+        console.log(`GameService.selectCards: Карты успешно сохранены в БД для игрока ${userId}`);
+      } catch (dbError) {
+        console.error(`GameService.selectCards: Ошибка при сохранении карт в БД:`, dbError);
+        // НЕ прерываем выполнение, так как в памяти карты уже сохранены
+        // Это обеспечивает работу даже при сбоях с БД
+      }
+
+      // Перепроверяем состояние после обновления
+      if (!game.players[playerIndex].isReady) {
+        console.error(`GameService.selectCards: КРИТИЧЕСКАЯ ОШИБКА! Игрок ${userId} не отмечен как готовый после обновления!`);
+
+        // Принудительно исправляем
+        game.players[playerIndex].isReady = true;
+        console.log(`GameService.selectCards: Принудительно установлен флаг isReady=true для игрока ${userId}`);
+      }
+
+      console.log(`GameService.selectCards: Завершили обработку выбора карт для игрока ${userId}, возвращаем успех`);
+
+      // После сохранения карт, отправляем сигнал о том, что данный игрок готов к бою
+      this.checkGameStart(roomId);
+
+      // Возвращаем успешный результат
+      return {
+        success: true,
+        message: 'Карты успешно выбраны',
+        isReady: true,
+        playerId: userId,
+        cards: cards.length
+      };
+    } catch (error) {
+      console.error(`GameService.selectCards: Ошибка при выборе карт:`, error);
+      return { success: false, message: `Ошибка при выборе карт: ${error.message}` };
+    }
   }
 
   // Проверка готовности всех игроков
@@ -638,6 +674,22 @@ class GameService {
     }
 
     return roomState;
+  }
+
+  // Получение объекта игры напрямую (для критических ситуаций)
+  getGame(roomId) {
+    if (!roomId) {
+      console.error('GameService.getGame: roomId не указан');
+      return null;
+    }
+
+    const game = this.games.get(roomId);
+    if (!game) {
+      console.error(`GameService.getGame: Игра с ID ${roomId} не найдена`);
+      return null;
+    }
+
+    return game;
   }
 }
 

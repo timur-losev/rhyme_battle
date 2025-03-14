@@ -39,6 +39,89 @@ export function GameProvider({ children }) {
   const { currentUser } = useAuth();
   const navigate = useNavigate();
 
+  // Добавляем явную функцию для синхронизации состояния playerReady
+  const syncPlayerReadyStatus = (readyState = true, source = 'unknown') => {
+    console.log(`GameContext: Синхронизация статуса playerReady=${readyState}, источник: ${source}`);
+
+    // Защита от неправильного вызова
+    if (typeof readyState !== 'boolean') {
+      console.error(`GameContext: Попытка установить некорректное значение для playerReady:`, readyState);
+      readyState = Boolean(readyState); // Явное приведение к boolean
+    }
+
+    // Проверяем реальное изменение состояния
+    if (playerReady !== readyState) {
+      console.log(`GameContext: Изменение статуса playerReady: ${playerReady} -> ${readyState}`);
+    } else {
+      console.log(`GameContext: Статус playerReady=${readyState} уже установлен, источник: ${source}`);
+    }
+
+    // Устанавливаем состояние
+    setPlayerReady(readyState);
+
+    // Глобальный флаг для синхронизации между компонентами
+    window._playerReadyState = readyState;
+    window._playerReadySource = source;
+
+    // Также сохраняем в sessionStorage для дополнительной надежности
+    try {
+      if (readyState) {
+        sessionStorage.setItem('playerReady', 'true');
+        sessionStorage.setItem('playerReadyTimestamp', new Date().toISOString());
+        sessionStorage.setItem('playerReadySource', source);
+
+        // Если есть ошибка выбора карт, отправляем событие, чтобы UI мог обновиться
+        if (window._cardSelectionErrorUI) {
+          console.log('GameContext: Сбрасываем ошибку выбора карт в UI через пользовательское событие');
+
+          try {
+            // Создаем и диспатчим событие для обновления UI
+            const event = new CustomEvent('playerReadyStateChanged', {
+              detail: { ready: true, source }
+            });
+            window.dispatchEvent(event);
+
+            // Сбрасываем флаг ошибки
+            window._cardSelectionErrorUI = false;
+          } catch (e) {
+            console.error('GameContext: Ошибка при отправке пользовательского события:', e);
+          }
+        }
+      } else {
+        sessionStorage.removeItem('playerReady');
+        sessionStorage.removeItem('playerReadyTimestamp');
+        sessionStorage.removeItem('playerReadySource');
+      }
+    } catch (e) {
+      console.error('GameContext: Ошибка при сохранении в sessionStorage:', e);
+    }
+
+    return readyState; // Возвращаем установленное значение
+  };
+
+  // Сброс состояния игры
+  const resetGame = () => {
+    setCurrentRoom(null);
+    setGameStatus('idle');
+    setPlayerReady(false);
+    setGameState(null);
+    setSelectedCards([]);
+    setBattleLog([]);
+    setCurrentEvent(null);
+    setRoomChecked(false); // Сбрасываем флаг проверки комнаты
+
+    // Очищаем localStorage
+    localStorage.removeItem('currentRoom');
+    localStorage.removeItem('gameStatus');
+
+    // Очищаем sessionStorage
+    sessionStorage.removeItem('playerReady');
+    sessionStorage.removeItem('playerReadyTimestamp');
+    sessionStorage.removeItem('playerReadySource');
+
+    console.log('GameContext: Состояние игры сброшено');
+  };
+
   // Добавляем throttle для запросов состояния комнаты
   // Эта переменная будет использоваться для отслеживания времени последнего запроса
   // ВАЖНО: использую переменную во внешней области видимости, доступную всем компонентам
@@ -235,8 +318,26 @@ export function GameProvider({ children }) {
   const loadCards = useCallback(async () => {
     console.log('💥 Запрос loadCards в GameContext был вызван');
 
+    // Инициализация статистики загрузки, если она еще не создана
+    if (!window._cardsLoadStats) {
+      window._cardsLoadStats = {
+        totalCalls: 0,
+        successfulLoads: 0,
+        failedLoads: 0,
+        lastCall: null
+      };
+    }
+
+    // Увеличиваем счетчик вызовов
+    window._cardsLoadStats.totalCalls++;
+    window._cardsLoadStats.lastCall = new Date().toISOString();
+
+    // Идентификатор для трассировки текущего вызова
+    const requestId = Math.random().toString(36).substring(2, 8);
+
     // Сохраним данные о контексте вызова для отладки
     const callerInfo = {
+      requestId,
       timestamp: new Date().toISOString(),
       room: currentRoom || 'нет',
       gameStatus: gameStatus || 'нет',
@@ -244,58 +345,134 @@ export function GameProvider({ children }) {
       cardsCount: cardsCollection.length,
       socketConnected: socket?.connected ? 'да' : 'нет',
       socketId: socket?.id || 'нет',
-      userId: currentUser?.id || 'нет'
+      userId: currentUser?.id || 'нет',
+      stackTrace: new Error().stack
     };
 
-    console.log('Контекст вызова loadCards:', callerInfo);
+    console.log(`loadCards[${requestId}]: Контекст вызова:`, callerInfo);
+
+    // Проверка, создан ли window._cardsLoadingPromise
+    if (!window._cardsLoadingPromise) {
+      window._cardsLoadingPromise = null;
+    }
+
+    // Проверка, создан ли window._cardsLoadingInProgress
+    if (typeof window._cardsLoadingInProgress === 'undefined') {
+      window._cardsLoadingInProgress = false;
+    }
+
+    // Проверяем, если загрузка уже идет
+    if (window._cardsLoadingInProgress && window._cardsLoadingPromise) {
+      console.log(`loadCards[${requestId}]: 🔵 Загрузка карт уже выполняется другим вызовом, ожидаем...`);
+      try {
+        // Возвращаем существующий промис вместо создания нового
+        const result = await window._cardsLoadingPromise;
+
+        if (result && result.length > 0) {
+          console.log(`loadCards[${requestId}]: ✅ Успешно получены карты из существующего промиса: ${result.length} шт.`);
+          return result;
+        } else {
+          console.log(`loadCards[${requestId}]: ⚠️ Существующий промис вернул пустой результат, инициируем новую загрузку`);
+          // Если промис вернул пустой результат, сбрасываем флаг и продолжаем
+          window._cardsLoadingInProgress = false;
+        }
+      } catch (err) {
+        console.error(`loadCards[${requestId}]: Ошибка ожидания существующего промиса:`, err);
+        // Если ожидание существующего промиса не удалось, продолжаем и создаем новый
+        window._cardsLoadingInProgress = false;
+      }
+    }
 
     // Если карты уже загружены, просто возвращаем их
     if (cardsCollection.length > 0) {
-      console.log(`✅ Карты уже загружены (${cardsCollection.length} шт.), возвращаем существующие`);
+      console.log(`loadCards[${requestId}]: ✅ Карты уже загружены (${cardsCollection.length} шт.), возвращаем существующие`);
+      // Считаем это успешной загрузкой для статистики
+      window._cardsLoadStats.successfulLoads++;
       return cardsCollection;
     }
 
+    // Устанавливаем флаг загрузки
+    window._cardsLoadingInProgress = true;
+    setLoading(true);
+    setCardsRequested(true);
+
+    console.log(`loadCards[${requestId}]: ⚠️ ПРИНУДИТЕЛЬНАЯ ЗАГРУЗКА ТЕСТОВЫХ КАРТ!`);
+
+    // Создаем новое обещание
+    window._cardsLoadingPromise = new Promise(async (resolve) => {
+      try {
+        console.log(`loadCards[${requestId}]: Начинаем загрузку тестовых карт...`);
+
+        // Небольшая искусственная задержка для симуляции загрузки
+        await new Promise(resolve => setTimeout(resolve, 500));
+
+        // Генерируем тестовые карты
+        const testCards = generateTestCards();
+
+        if (!testCards || testCards.length === 0) {
+          throw new Error('Сгенерированы пустые тестовые карты!');
+        }
+
+        console.log(`loadCards[${requestId}]: Загружено ${testCards.length} тестовых карт, обновляем состояние`);
+
+        // Устанавливаем карты в состояние
+        setCardsCollection(testCards);
+        console.log(`loadCards[${requestId}]: Состояние обновлено, cardsCollection теперь содержит ${testCards.length} карт`);
+
+        // Настраиваем другие состояния
+        setLoading(false);
+        setCardsRequested(false);
+        setError('');
+
+        console.log(`loadCards[${requestId}]: Карты успешно загружены`);
+
+        // Сбрасываем флаг загрузки
+        window._cardsLoadingInProgress = false;
+
+        // Обновляем статистику
+        window._cardsLoadStats.successfulLoads++;
+
+        // Завершаем промис
+        resolve(testCards);
+      } catch (innerErr) {
+        console.error(`loadCards[${requestId}]: Внутренняя ошибка загрузки карт:`, innerErr);
+        setLoading(false);
+        setCardsRequested(false);
+        window._cardsLoadingInProgress = false;
+
+        // Обновляем статистику
+        window._cardsLoadStats.failedLoads++;
+
+        resolve([]);
+      }
+    });
+
     try {
-      setLoading(true);
-      console.error('⚠️ ПРИНУДИТЕЛЬНАЯ ЗАГРУЗКА ТЕСТОВЫХ КАРТ!');
+      // Возвращаем результат ожидания промиса
+      const cards = await window._cardsLoadingPromise;
 
-      // Создаем уникальный идентификатор запроса для отслеживания
-      const requestId = Date.now();
-      console.log(`loadCards[${requestId}]: Начинаем загрузку тестовых карт...`);
-
-      // Небольшая искусственная задержка для симуляции загрузки
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      // Принудительно генерируем тестовые карты напрямую
-      const testCards = generateTestCards();
-
-      if (!testCards || testCards.length === 0) {
-        throw new Error('Сгенерированы пустые тестовые карты!');
+      // Проверяем результат перед возвратом
+      if (!cards || cards.length === 0) {
+        console.warn(`loadCards[${requestId}]: Промис завершился успешно, но карты не были получены`);
+      } else {
+        console.log(`loadCards[${requestId}]: Успешно получены карты: ${cards.length} шт.`);
       }
 
-      console.log(`loadCards[${requestId}]: Загружено ${testCards.length} тестовых карт, обновляем состояние`);
-
-      // Устанавливаем карты в состояние
-      setCardsCollection(testCards);
-      console.log(`loadCards[${requestId}]: Состояние обновлено, cardsCollection теперь содержит ${testCards.length} карт`);
-
-      // Настраиваем другие состояния
-      setLoading(false);
-      setCardsRequested(false);
-      setError('');
-
-      console.log(`loadCards[${requestId}]: Карты успешно загружены`);
-
-      // Возвращаем карты для использования в цепочке вызовов
-      return testCards;
+      return cards;
     } catch (err) {
-      console.error('❌ КРИТИЧЕСКАЯ ОШИБКА загрузки карт:', err);
+      console.error(`loadCards[${requestId}]: ❌ КРИТИЧЕСКАЯ ОШИБКА загрузки карт:`, err);
+
       // Показываем четкое сообщение об ошибке
       setError(`Критическая ошибка загрузки карт: ${err.message}`);
       setLoading(false);
+      setCardsRequested(false);
+      window._cardsLoadingInProgress = false;
+
+      // Обновляем статистику
+      window._cardsLoadStats.failedLoads++;
 
       // В случае ошибки, попробуем еще раз сгенерировать карты напрямую
-      console.log('Пробуем аварийную генерацию...');
+      console.log(`loadCards[${requestId}]: Пробуем аварийную генерацию...`);
 
       try {
         const emergencyCards = [
@@ -314,21 +491,16 @@ export function GameProvider({ children }) {
 
         // Устанавливаем аварийные карты
         setCardsCollection(emergencyCards);
-        console.log('Установлены аварийные карты вместо основных');
-
-        // Сбрасываем флаг через небольшую задержку
-        setTimeout(() => {
-          setCardsRequested(false);
-        }, 1000);
+        console.log(`loadCards[${requestId}]: Установлены аварийные карты вместо основных`);
 
         return emergencyCards;
       } catch (emergencyError) {
         // Если даже это не работает, выводим критическую ошибку
-        console.error('❌❌❌ ПОЛНЫЙ СБОЙ ЗАГРУЗКИ КАРТ:', emergencyError);
+        console.error(`loadCards[${requestId}]: ❌❌❌ ПОЛНЫЙ СБОЙ ЗАГРУЗКИ КАРТ:`, emergencyError);
         return [];
       }
     }
-  }, [setLoading, setCardsCollection, setError, generateTestCards, currentUser]);
+  }, [setLoading, setCardsCollection, setError, generateTestCards, currentUser, cardsCollection.length, currentRoom, gameStatus, socket]);
 
   // Переместим определение joinRoom сюда, после объявления всех необходимых функций
   const joinRoom = useCallback((roomId) => {
@@ -412,339 +584,251 @@ export function GameProvider({ children }) {
   useEffect(() => {
     if (!socket) return;
 
-    // Проверяем, были ли уже инициализированы слушатели
-    if (socket._listenersInitialized) {
-      console.log('Слушатели уже настроены, пропускаем повторную настройку');
-      return;
-    }
+    // Добавляем обработчик для отладки всех входящих событий
+    const debugHandler = (eventName) => (...args) => {
+      console.log(`GameContext: DEBUG событие ${eventName} получено:`, args);
+    };
 
-    // Предотвращаем множественные установки слушателей
-    // Сначала удаляем все существующие обработчики
-    socket.off('connected');
-    socket.off('error');
-    socket.off('pong');
-    socket.off('roomCreated');
-    socket.off('leftRoom');
-    socket.off('joinedRoom');
-    socket.off('roomState');
-    socket.off('joinRoomError');
-    socket.off('playerJoined');
-    socket.off('cardsSelected');
-    socket.off('playerReady');
-    socket.off('battleStart');
-    socket.off('cardPlayed');
-    socket.off('turnEnded');
-    socket.off('specialEvent');
-    socket.off('gameEnded');
-    socket.off('playerDisconnected');
-    socket.off('roomChecked');
-    socket.off('gameStatusUpdate');
-
-    console.log('🔄 Настройка слушателей Socket.io');
-
-    // Тестовое событие от сервера
-    socket.on('connected', (data) => {
-      console.log('Получено приветствие от сервера:', data);
+    // Слушаем все ключевые события для отладки
+    const events = ['cardsSelected', 'playerReady', 'updatePlayerStatus', 'roomState', 'gameStatusUpdate', 'battleStart'];
+    events.forEach(eventName => {
+      socket.on(eventName, debugHandler(eventName));
     });
 
-    // Обработчик ошибок от сервера
+    // Обработка нового события updatePlayerStatus для прямого обновления статуса игрока
+    socket.on('updatePlayerStatus', (data) => {
+      console.log('GameContext: Получено прямое обновление статуса игрока:', data);
+      if (data.userId === currentUser?.id && data.isReady === true) {
+        console.log('GameContext: Явно устанавливаем статус playerReady=true на основе updatePlayerStatus');
+        syncPlayerReadyStatus(true, 'updatePlayerStatus');
+      }
+    });
+
+    // Socket подключен
+    socket.on('connected', (data) => {
+      console.log('Соединение с сервером установлено:', data);
+      setIsConnected(true);
+
+      if (currentRoom) {
+        console.log('Уже есть активная комната, отправляем запрос состояния:', currentRoom);
+        // Явно запрашиваем состояние при подключении, если уже есть комната
+        socket.emit('getRoomState', { roomId: currentRoom });
+
+        // Проверяем статус playerReady из sessionStorage
+        const savedPlayerReady = sessionStorage.getItem('playerReady');
+        if (savedPlayerReady === 'true') {
+          console.log('Восстанавливаем статус playerReady=true из sessionStorage после переподключения');
+          setPlayerReady(true);
+        }
+      }
+    });
+
+    // Ошибка в соединении
+    socket.on('connect_error', (error) => {
+      console.error('Ошибка соединения с сервером:', error);
+      setIsConnected(false);
+      setError(`Ошибка соединения: ${error.message}`);
+    });
+
+    // Соединение разорвано
+    socket.on('disconnect', (reason) => {
+      console.log('Соединение с сервером разорвано:', reason);
+      setIsConnected(false);
+      setError(`Соединение разорвано: ${reason}`);
+
+      // Если это не явное отключение, пробуем переподключиться
+      if (reason !== 'io client disconnect') {
+        console.log('Пробуем переподключиться...');
+        socket.connect();
+      }
+    });
+
+    // Уведомление об ошибке
     socket.on('error', (data) => {
       console.error('Получена ошибка от сервера:', data);
-      if (data && data.message) {
-        setError(data.message);
-        // Показываем уведомление пользователю
-        alert(`Ошибка сервера: ${data.message}`);
-      }
+      setError(data.message || 'Неизвестная ошибка');
     });
 
-    // Ответ на пинг
-    socket.on('pong', (data) => {
-      console.log('Получен pong от сервера:', data);
-      const latency = new Date() - new Date(data.received.timestamp);
-      console.log(`Задержка: ${latency}ms`);
-    });
-
-    // Создание комнаты
+    // Комната создана
     socket.on('roomCreated', (data) => {
       console.log('Комната создана:', data);
-      setCurrentRoom(data.roomId);
-      setGameStatus('waiting');
-      navigate(`/game/${data.roomId}`);
+
+      if (data.roomId) {
+        // Сохраняем ID комнаты
+        setCurrentRoom(data.roomId);
+        localStorage.setItem('currentRoom', data.roomId);
+
+        // Присоединяемся к комнате
+        joinRoom(data.roomId);
+      }
     });
 
-    // Выход из комнаты (новый обработчик)
-    socket.on('leftRoom', (data) => {
-      console.log('Выход из комнаты подтвержден сервером:', data);
-      // Сбрасываем состояние только когда получаем подтверждение от сервера
-      resetGame();
-    });
-
-    // Присоединение к комнате
+    // Успешное присоединение к комнате
     socket.on('joinedRoom', (data) => {
       console.log('Присоединились к комнате:', data);
-      setCurrentRoom(data.roomId);
 
-      // Устанавливаем статус комнаты
-      if (data.status && data.status !== gameStatus) {
-        console.log('Обновляем статус игры при присоединении к комнате:', data.status);
-        setGameStatus(data.status);
-      }
-      // Статус игры устанавливаем только если не находимся уже в режиме боя
-      else if (gameStatus !== 'battle' && !data.status) {
-        console.log('Установка статуса по умолчанию при присоединении к комнате');
-        setGameStatus('selecting_cards');
-      }
-
-      // ПОВТОРНАЯ ПРОВЕРКА И ЗАГРУЗКА КАРТ
-      console.log('joinedRoom: Проверка наличия карт:', cardsCollection.length);
-
-      // Принудительно загружаем карты независимо от предыдущего состояния
-      console.log('joinedRoom: Принудительно загружаем карты');
-      loadCards().then(cards => {
-        console.log(`joinedRoom: Загружено ${cards?.length || 0} карт после присоединения к комнате`);
-      }).catch(err => {
-        console.error('joinedRoom: Ошибка загрузки карт:', err);
-      });
-
-      // Запрашиваем состояние комнаты единожды после присоединения
       if (data.roomId) {
-        console.log('Запрашиваем актуальное состояние комнаты после присоединения');
-        // Запрашиваем состояние комнаты только один раз с небольшой задержкой
-        setTimeout(() => {
-          if (socket && socket.connected) {
-            console.log('Запрос состояния комнаты после присоединения');
-            debouncedGetRoomState(data.roomId);
-          }
-        }, 500);
+        setCurrentRoom(data.roomId);
+        localStorage.setItem('currentRoom', data.roomId);
       }
 
-      // Если вторым игроком присоединились к игре в процессе боя
-      if (data.battleInProgress) {
-        console.log('Присоединились к комнате, где уже идет бой');
-        setGameStatus('battle');
-      }
-    });
-
-    // Новый обработчик для получения состояния комнаты
-    socket.on('roomState', (data) => {
-      // Заменяем постоянный лог на более умный вариант
-      const isNewState = !gameState ||
-        !gameState.players ||
-        gameState.players.length !== data.players.length ||
-        gameState.status !== data.status;
-
-      // Добавляем подробную информацию для отладки
-      let logMessage = isNewState ?
-        'Получено существенное обновление состояния комнаты:' :
-        'Получено незначительное обновление состояния комнаты:';
-
-      console.log(logMessage, {
-        roomId: data.roomId,
-        status: data.status,
-        playersCount: data.players?.length || 0,
-        players: data.players?.map(p => ({ id: p.userId, ready: p.isReady })),
-        timestamp: data.timestamp
-      });
-
-      // Проверяем наличие состояния и всех необходимых свойств
-      if (!data || !data.status) {
-        console.log('Получено некорректное состояние комнаты:', data);
-        return;
-      }
-
-      // Проверяем соответствие состояния текущей комнате
-      if (data.roomId !== currentRoom) {
-        console.log(`Получено состояние для другой комнаты (${data.roomId}), но мы находимся в комнате ${currentRoom}`);
-        return;
-      }
-
-      // Важно: обновляем состояние комнаты до проверки статуса, 
-      // чтобы убедиться, что состояние игроков обновлено
-      setGameState(data);
-
-      // Затем, если изменился статус, обновляем и его
-      if (data.status !== gameStatus) {
-        console.log(`Обновляем статус игры из roomState: ${data.status} (был: ${gameStatus})`);
+      if (data.status) {
         setGameStatus(data.status);
+        localStorage.setItem('gameStatus', data.status);
       }
+
+      setError(''); // Сбрасываем ошибки
     });
 
     // Ошибка при присоединении к комнате
     socket.on('joinRoomError', (data) => {
       console.error('Ошибка при присоединении к комнате:', data);
-      setError(data.message);
+      setError(data.message || 'Не удалось присоединиться к комнате');
+
+      // Если комната не существует, сбрасываем состояние
+      if (data.message.includes('не существует')) {
+        resetGame();
+      }
     });
 
-    // Присоединение игрока к комнате
+    // Игрок присоединился к комнате
     socket.on('playerJoined', (data) => {
-      console.log('Получено событие playerJoined:', data);
+      console.log('Игрок присоединился к комнате:', data);
 
-      // Принудительное запрашивание состояния комнаты при присоединении нового игрока
+      // Запрашиваем обновленное состояние комнаты
       if (currentRoom) {
-        console.log('Немедленно запрашиваем обновление состояния при присоединении игрока');
-
-        // Сначала сразу же отправляем запрос без задержки
-        if (socket && socket.connected) {
-          console.log('СРОЧНЫЙ запрос состояния комнаты после присоединения игрока');
-          // Напрямую отправляем сокет-запрос, в обход троттлинга
-          socket.emit('getRoomState', { roomId: currentRoom });
-
-          // Обновляем таймеры троттлинга, чтобы не дублировать запросы
-          GLOBAL_THROTTLE_STATE.lastRoomStateRequestTime = Date.now();
-          GLOBAL_THROTTLE_STATE.pendingRequests[currentRoom] = Date.now();
-        }
-
-        // Дополнительно запрашиваем состояние с задержкой, на случай если сервер не успел обработать первое обновление
-        setTimeout(() => {
-          if (socket && socket.connected) {
-            console.log('Повторный запрос состояния комнаты после присоединения игрока (через 800мс)');
-            debouncedGetRoomState(currentRoom);
-          }
-        }, 800); // Уменьшаем задержку до 800мс (было 1500)
-      }
-
-      // Предварительно обновляем информацию об игроках в UI без ожидания ответа от сервера
-      setGameState(prevState => {
-        // Проверяем, есть ли предыдущее состояние и создаем его структуру, если нет
-        if (!prevState || !prevState.players) {
-          console.log('Нет предыдущего состояния, создаем новое с обоими игроками');
-          return {
-            players: [
-              { userId: currentUser.id, isReady: false },
-              { userId: data.userId, isReady: false }
-            ],
-            status: 'selecting_cards',
-            playersCount: 2,
-            timestamp: data.timestamp
-          };
-        }
-
-        // Проверяем, есть ли уже этот игрок в списке
-        const playerExists = prevState.players.some(player => player.userId === data.userId);
-        if (playerExists) {
-          console.log('Игрок уже добавлен в состояние');
-          // Даже если игрок существует, обновляем playersCount для уверенности
-          return {
-            ...prevState,
-            playersCount: prevState.players.length,
-            timestamp: data.timestamp
-          };
-        }
-
-        // Если игрок еще не добавлен, добавляем его
-        console.log('Добавляем нового игрока в состояние');
-        const updatedPlayers = [...prevState.players, { userId: data.userId, isReady: false }];
-        return {
-          ...prevState,
-          players: updatedPlayers,
-          playersCount: updatedPlayers.length,
-          timestamp: data.timestamp
-        };
-      });
-
-      // Загружаем карты для нового игрока, если они еще не загружены
-      if (cardsCollection.length === 0 && !loading && !cardsRequested) {
-        console.log('Загружаем карты при присоединении игрока');
-        setCardsRequested(true);
-        loadCards();
+        socket.emit('getRoomState', { roomId: currentRoom });
       }
     });
 
-    // Выбор карт подтвержден
+    // Обработка cardsSelected - явно используем новую функцию синхронизации
     socket.on('cardsSelected', (data) => {
-      console.log('Получено подтверждение выбора карт от сервера:', data);
+      console.log('GameContext: Получено событие cardsSelected:', data);
 
-      if (!data || !data.success) {
-        console.error('Ошибка в ответе сервера на выбор карт:', data);
-        setError(data?.message || 'Сервер не подтвердил выбор карт');
-        return;
-      }
+      // Добавляем подробное логирование
+      const userId = data?.userId || 'неизвестно';
+      const success = data?.success ? 'успешно' : 'ошибка';
+      const currentUserId = currentUser?.id || 'не авторизован';
+      console.log(`GameContext: cardsSelected для игрока ${userId} - ${success}, текущий игрок: ${currentUserId}`);
 
-      // Отображаем логи выбранных карт
-      if (data.cards && Array.isArray(data.cards)) {
-        console.log(`Выбрано ${data.cards.length} карт:`, data.cards);
-      }
+      // Синхронизируем состояние независимо от userId при успехе
+      // Это позволяет обрабатывать случаи, когда сервер не присылает userId
+      if (data && data.success) {
+        console.log('GameContext: Устанавливаем playerReady=true на основе события cardsSelected (success=true)');
+        syncPlayerReadyStatus(true, 'cardsSelected');
 
-      // Обновляем статус готовности игрока
-      setPlayerReady(true);
-
-      // Запрашиваем обновление состояния комнаты
-      if (socket && socket.connected && currentRoom) {
-        console.log('Запрашиваем обновление состояния комнаты после подтверждения выбора карт');
-        debouncedGetRoomState(currentRoom);
+        // Дополнительное подтверждение для надежности
+        window._cardSelectionConfirmed = true;
+        window._cardSelectionTimestamp = new Date().toISOString();
       }
     });
 
-    // Игрок готов (новое событие)
+    // Обработка playerReady - явно используем новую функцию синхронизации
     socket.on('playerReady', (data) => {
-      console.log('Игрок готов:', data);
+      console.log('GameContext: Получено событие playerReady:', data);
 
-      // Обновляем состояние игры с информацией о готовности игрока
-      setGameState(prevState => {
-        if (!prevState || !prevState.players) return prevState;
+      // Расширяем логику обработки - принимаем и данные без userId для повышения надежности
+      if (data) {
+        // Проверяем соответствие пользователю, если userId указан
+        if (!data.userId || data.userId === currentUser?.id) {
+          console.log('GameContext: Устанавливаем статус playerReady=true на основе события playerReady');
+          syncPlayerReadyStatus(true, 'playerReady');
 
-        const updatedPlayers = prevState.players.map(player =>
-          player.userId === data.userId
-            ? { ...player, isReady: true }
-            : player
-        );
-
-        return {
-          ...prevState,
-          players: updatedPlayers
-        };
-      });
+          // Дополнительное подтверждение
+          window._playerReadyConfirmed = true;
+          window._playerReadyTimestamp = new Date().toISOString();
+        } else {
+          console.log(`GameContext: Событие playerReady для другого игрока (${data.userId}), игнорируем`);
+        }
+      }
     });
 
-    // Начало боя
+    // Обработка roomState - проверяем статус игрока
+    socket.on('roomState', (data) => {
+      console.log('GameContext: Получено событие roomState:', data);
+
+      if (data && data.players && currentUser) {
+        const player = data.players.find(p => p.userId === currentUser.id);
+        if (player) {
+          // Подробное логирование состояния игрока
+          console.log(`GameContext: Состояние текущего игрока в roomState: id=${player.userId}, ready=${player.isReady}`);
+
+          if (player.isReady) {
+            console.log('GameContext: Игрок отмечен как готовый в roomState, синхронизируем состояние');
+            syncPlayerReadyStatus(true, 'roomState');
+
+            // Сбрасываем возможные флаги ошибок выбора карт (для совместимости с CardSelector)
+            window._cardSelectionError = false;
+          } else {
+            console.log('GameContext: Игрок НЕ отмечен как готовый в roomState');
+            // Не сбрасываем статус готовности, если он уже установлен в true
+            // Это предотвращает рассинхронизацию при задержке обновления данных сервера
+            if (!playerReady) {
+              console.log('GameContext: Синхронизируем playerReady=false из roomState');
+              syncPlayerReadyStatus(false, 'roomState');
+            } else {
+              console.log('GameContext: Сохраняем существующий playerReady=true несмотря на roomState');
+            }
+          }
+        } else {
+          console.log('GameContext: Текущий игрок не найден в данных roomState');
+        }
+      }
+
+      // Обновляем состояние игры
+      setGameState(data);
+    });
+
+    // Обработка gameStatusUpdate - обновляем статус игры
+    socket.on('gameStatusUpdate', (data) => {
+      console.log('GameContext: Получено обновление статуса игры:', data);
+      if (data.roomId === currentRoom) {
+        setGameStatus(data.status);
+      }
+    });
+
+    // Обработка battleStart - начинаем бой
     socket.on('battleStart', (data) => {
       setGameStatus('battle');
       setGameState(data);
     });
 
-    // Разыгрывание карты
+    // Сыграна карта
     socket.on('cardPlayed', (data) => {
-      // Обновление состояния игры после разыгрывания карты
-      if (data.success) {
+      console.log('Карта сыграна:', data);
+
+      // Добавляем запись в лог боя
+      if (data.battleLog) {
         setBattleLog(prev => [...prev, data.battleLog]);
-
-        // Обновление счета игрока
-        if (gameState) {
-          const updatedPlayers = [...gameState.players];
-          const playerIndex = data.player.index;
-          updatedPlayers[playerIndex].score = data.player.newScore;
-
-          setGameState({
-            ...gameState,
-            players: updatedPlayers
-          });
-        }
       }
     });
 
-    // Окончание хода
+    // Ход закончен
     socket.on('turnEnded', (data) => {
+      console.log('Ход закончен:', data);
+
+      // Обновляем состояние игры
       setGameState(data);
     });
 
-    // Специальное событие
+    // Обработка specialEvent - устанавливаем специальное событие
     socket.on('specialEvent', (data) => {
       setCurrentEvent(data);
     });
 
-    // Окончание игры
+    // Обработка gameEnded - завершаем игру
     socket.on('gameEnded', (data) => {
       setGameStatus('ended');
       setGameState(data);
     });
 
-    // Отключение игрока
+    // Обработка playerDisconnected - отключаем игрока
     socket.on('playerDisconnected', (data) => {
       setError(data.message);
       setGameStatus('ended');
     });
 
-    // Добавим обработчик для проверки комнаты
+    // Обработка roomChecked - проверяем комнату
     socket.on('roomChecked', (data) => {
       console.log('Получен результат проверки комнаты:', data);
       setRoomChecked(true); // Устанавливаем флаг, что комната была проверена
@@ -760,46 +844,14 @@ export function GameProvider({ children }) {
       }
     });
 
-    // Новый обработчик для принудительного обновления статуса
-    socket.on('gameStatusUpdate', (data) => {
-      console.log('Получено принудительное обновление статуса игры:', data);
-
-      // Проверяем, что сообщение для текущей комнаты
-      if (data.roomId === currentRoom) {
-        // Обновляем статус игры
-        if (data.status && data.status !== 'waiting' && gameStatus === 'waiting') {
-          console.log('Принудительное обновление статуса игры:', data.status);
-          setGameStatus(data.status);
-        }
-
-        // Запрашиваем актуальное состояние комнаты
-        socket.emit('getRoomState', { roomId: currentRoom });
-      }
-    });
-
+    // Функция очистки при размонтировании
     return () => {
-      socket.off('disconnect');
-      socket.off('error');
-      socket.off('roomCreated');
-      socket.off('joinedRoom');
-      socket.off('joinRoomError');
-      socket.off('playerJoined');
-      socket.off('cardsSelected');
-      socket.off('playerReady');
-      socket.off('battleStart');
-      socket.off('cardPlayed');
-      socket.off('turnEnded');
-      socket.off('specialEvent');
-      socket.off('gameEnded');
-      socket.off('playerDisconnected');
-      socket.off('roomState');
-      socket.off('roomChecked');
-      socket.off('gameStatusUpdate'); // Отписываемся от нового события
-    };
+      console.log('GameContext: Отключаем слушатели сокета при размонтировании');
 
-    // Устанавливаем флаг, что слушатели были инициализированы
-    socket._listenersInitialized = true;
-  }, [socket, navigate, currentUser?.id, currentRoom, gameStatus, joinRoom]);
+      // Отключаем все слушатели
+      socket.off();
+    };
+  }, [socket, currentUser, currentRoom, joinRoom, resetGame]);
 
   // Сохраняем currentRoom в localStorage при его изменении
   useEffect(() => {
@@ -849,7 +901,7 @@ export function GameProvider({ children }) {
           console.log('Не получен ответ о проверке комнаты, пробуем переподключиться');
           joinRoom(savedRoom);
         }
-      }, 3000); // Даем 3 секунды на получение ответа
+      }, 3000);
 
       return () => clearTimeout(checkTimer);
     }
@@ -908,136 +960,196 @@ export function GameProvider({ children }) {
 
   // Выбор карт для боя
   const selectCardsForBattle = (cardIds) => {
-    console.log('GameContext: Вызов selectCardsForBattle, выбранные карты:', cardIds);
+    console.log('selectCardsForBattle вызван с картами:', cardIds);
 
-    // Проверяем на форматирование и создаем копию, чтобы избежать мутаций
-    const safeCardIds = Array.isArray(cardIds) ? [...cardIds] : [];
-
-    if (!socket) {
-      console.error('GameContext: Невозможно выбрать карты - socket не инициализирован');
-      setError('Отсутствует соединение с сервером. Обновите страницу');
-
-      // Пробуем переподключиться автоматически
-      reconnectSocket();
+    // Проверка соединения
+    if (!socket || !socket.connected) {
+      console.error('selectCardsForBattle: Нет соединения с сервером!');
+      setError('Нет соединения с сервером. Пожалуйста, обновите страницу.');
       return false;
     }
 
-    if (!currentUser) {
-      console.error('GameContext: Невозможно выбрать карты - пользователь не авторизован');
-      setError('Необходимо авторизоваться');
+    // Проверка данных
+    if (!currentUser || !currentUser.id) {
+      console.error('selectCardsForBattle: Пользователь не аутентифицирован');
+      setError('Необходимо войти в систему для выбора карт.');
       return false;
     }
 
     if (!currentRoom) {
-      console.error('GameContext: Невозможно выбрать карты - не выбрана комната');
-      setError('Не выбрана игровая комната');
+      console.error('selectCardsForBattle: Комната не выбрана');
+      setError('Необходимо выбрать комнату для игры.');
       return false;
     }
 
-    // Проверяем корректность ID карт
-    if (safeCardIds.length === 0) {
-      console.error('GameContext: Невозможно выбрать карты - некорректные данные карт:', cardIds);
-      setError('Выберите карты для игры');
+    // Проверяем, что cardIds - это массив строк
+    if (!Array.isArray(cardIds) || cardIds.some(id => typeof id !== 'string')) {
+      console.error('selectCardsForBattle: Некорректный формат ID карт', cardIds);
+      setError('Некорректный формат выбранных карт.');
       return false;
     }
 
-    console.log(`GameContext: Отправка выбранных карт (${safeCardIds.length}) на сервер. Комната: ${currentRoom}, Пользователь: ${currentUser.id}`);
-
-    // Сохраняем карты в локальном состоянии
-    setSelectedCards(safeCardIds);
-
-    // Проверяем соединение с сервером с повторными попытками
-    const socketStatus = diagnoseSockets();
-
-    if (!socketStatus.connected) {
-      console.error('GameContext: Соединение с сервером потеряно, пробуем восстановить...');
-
-      // Пробуем переподключиться перед отправкой
-      try {
-        socket.connect();
-
-        // Даем время на переподключение
-        setTimeout(() => {
-          if (socket.connected) {
-            console.log('GameContext: Соединение восстановлено, пробуем отправить карты снова...');
-            // Рекурсивно вызываем функцию заново после переподключения
-            selectCardsForBattle(safeCardIds);
-          } else {
-            setError('Не удалось восстановить соединение с сервером. Обновите страницу и попробуйте снова');
+    // Обновляем информацию о готовности игрока
+    const updatePlayerReady = (playerId, isReady) => {
+      console.log(`updatePlayerReady: Игрок ${playerId} готов=${isReady}`);
+      if (currentRoom && currentRoom.players) {
+        const updatedPlayers = currentRoom.players.map(player => {
+          if (player.userId === playerId) {
+            return { ...player, isReady };
           }
-        }, 1000);
-      } catch (err) {
-        console.error('GameContext: Не удалось восстановить соединение:', err);
-        setError('Соединение с сервером потеряно. Обновите страницу и попробуйте снова');
-        return false;
+          return player;
+        });
+
+        // Обновляем состояние комнаты
+        setCurrentRoom(prevRoom => {
+          if (!prevRoom) return null;
+          return { ...prevRoom, players: updatedPlayers };
+        });
+
+        // Проверяем, является ли текущий игрок тем, чей статус изменился
+        if (playerId === currentUser.id) {
+          console.log(`updatePlayerReady: Обновляем статус готовности текущего игрока ${playerId} на ${isReady}`);
+          // Отправляем custom event для компонентов, которым нужно знать об изменении готовности
+          const event = new CustomEvent('playerReadyStateChanged', {
+            detail: { isReady, playerId, timestamp: new Date().toISOString() }
+          });
+          window.dispatchEvent(event);
+        }
       }
-
-      return false;
-    }
-
-    // Снимаем предыдущие ошибки
-    setError('');
+    };
 
     try {
-      // Отправляем событие на сервер с проверкой доставки
+      console.log(`selectCardsForBattle: Отправляем выбранные карты на сервер. Комната: ${currentRoom.id}, Игрок: ${currentUser.id}`);
+
+      // Проверяем текущее состояние готовности игрока
+      const currentPlayer = currentRoom.players.find(p => p.userId === currentUser.id);
+      if (currentPlayer && currentPlayer.isReady) {
+        console.log('selectCardsForBattle: Игрок уже отмечен как готовый. Сбрасываем состояние перед новым выбором.');
+        // Сбрасываем флаг готовности локально, чтобы отразить новую попытку выбора
+        updatePlayerReady(currentUser.id, false);
+      }
+
+      // Подготавливаем данные для отправки
       const eventData = {
-        roomId: currentRoom,
+        roomId: currentRoom.id,
         userId: currentUser.id,
-        cards: safeCardIds,
+        cards: cardIds,
         timestamp: new Date().toISOString()
       };
 
-      console.log('GameContext: Отправка данных карт:', JSON.stringify(eventData));
+      console.log('selectCardsForBattle: Данные для отправки:', eventData);
 
-      // Устанавливаем флаг для отслеживания ответа
-      let responseReceived = false;
+      // Устанавливаем флаги для отслеживания состояния
+      let cardSelectionConfirmed = false;
+      let playerReadyConfirmed = false;
 
-      // Функция для однократной обработки ответа
-      const handleResponse = (response) => {
-        if (responseReceived) return; // Избегаем повторной обработки
-        responseReceived = true;
+      // Обработчик подтверждения выбора карт
+      const handleCardsSelected = (data) => {
+        console.log('Получено событие cardsSelected:', data);
+        if (data && data.success) {
+          console.log('Сервер подтвердил выбор карт!');
+          cardSelectionConfirmed = true;
 
-        console.log('GameContext: Получен ответ о выборе карт:', response);
-        clearTimeout(timeoutId);
-      };
-
-      // Устанавливаем временный обработчик для отслеживания ответа
-      const onCardsSelectedHandler = (data) => handleResponse(data);
-      socket.once('cardsSelected', onCardsSelectedHandler);
-
-      // Устанавливаем временный обработчик ошибок
-      const onErrorHandler = (data) => {
-        console.error('GameContext: Получена ошибка при выборе карт:', data);
-        handleResponse({ success: false, error: data?.message || 'Неизвестная ошибка' });
-      };
-      socket.once('error', onErrorHandler);
-
-      // Устанавливаем таймер для проверки ответа
-      const timeoutId = setTimeout(() => {
-        if (!responseReceived) {
-          console.error('GameContext: Таймаут ожидания ответа от сервера');
-          socket.off('cardsSelected', onCardsSelectedHandler);
-          socket.off('error', onErrorHandler);
-          setError('Сервер не отвечает. Проверьте соединение и попробуйте снова');
+          // Если от сервера пришел флаг готовности, обновляем состояние
+          if (data.isReady) {
+            console.log('Сервер отметил игрока как готового в ответе cardsSelected');
+            playerReadyConfirmed = true;
+            updatePlayerReady(currentUser.id, true);
+          }
+        } else {
+          console.error('Ошибка подтверждения выбора карт:', data?.message || 'Неизвестная ошибка');
+          setError(data?.message || 'Сервер не подтвердил выбор карт. Попробуйте еще раз.');
         }
-      }, 5000);
+      };
 
-      // Отправляем данные
+      // Обработчик события готовности игрока
+      const handlePlayerReady = (data) => {
+        console.log('Получено событие playerReady:', data);
+        if (data && data.userId === currentUser.id) {
+          console.log('Сервер подтвердил готовность игрока!');
+          playerReadyConfirmed = true;
+          updatePlayerReady(currentUser.id, true);
+        }
+      };
+
+      // Обработчик обновления состояния игрока
+      const handleUpdatePlayerStatus = (data) => {
+        console.log('Получено событие updatePlayerStatus:', data);
+        if (data && data.userId === currentUser.id) {
+          console.log(`Обновляем статус игрока: ${data.userId}, готов=${data.isReady}`);
+          playerReadyConfirmed = data.isReady;
+          updatePlayerReady(data.userId, data.isReady);
+        }
+      };
+
+      // Устанавливаем обработчики событий
+      socket.once('cardsSelected', handleCardsSelected);
+      socket.once('playerReady', handlePlayerReady);
+      socket.on('updatePlayerStatus', handleUpdatePlayerStatus);
+
+      // Отправляем событие выбора карт
       socket.emit('selectCards', eventData);
-      console.log('GameContext: Событие selectCards успешно отправлено');
 
-      // Запрашиваем обновление состояния комнаты через задержку
+      // Устанавливаем таймаут для проверки результата
       setTimeout(() => {
-        if (socket && socket.connected) {
-          console.log('GameContext: Запрос обновления состояния комнаты после выбора карт');
-          debouncedGetRoomState(currentRoom);
+        // Удаляем обработчики
+        socket.off('cardsSelected', handleCardsSelected);
+        socket.off('playerReady', handlePlayerReady);
+        socket.off('updatePlayerStatus', handleUpdatePlayerStatus);
+
+        console.log('Проверка результата выбора карт после таймаута');
+        console.log('Карты подтверждены:', cardSelectionConfirmed);
+        console.log('Готовность подтверждена:', playerReadyConfirmed);
+
+        if (!cardSelectionConfirmed) {
+          console.error('Сервер не подтвердил выбор карт в течение таймаута');
+          setError('Сервер не подтвердил выбор карт. Возможно, проблема с соединением.');
         }
-      }, 1000);
+
+        // Если карты подтверждены, но статус готовности не изменился
+        if (cardSelectionConfirmed && !playerReadyConfirmed) {
+          console.log('Карты подтверждены, но игрок не отмечен как готовый. Проверяем состояние комнаты.');
+
+          // Запрашиваем актуальное состояние комнаты
+          socket.emit('requestRoomState', { roomId: currentRoom.id });
+
+          // Проверяем состояние через 1 секунду после запроса
+          setTimeout(() => {
+            const currentPlayer = currentRoom.players.find(p => p.userId === currentUser.id);
+            if (currentPlayer && currentPlayer.isReady) {
+              console.log('Игрок уже отмечен как готовый в текущем состоянии комнаты');
+              updatePlayerReady(currentUser.id, true);
+            } else {
+              console.error('Игрок все еще не отмечен как готовый после запроса состояния комнаты');
+              setError('Сервер получил карты, но не подтвердил выбор. Ожидание...');
+
+              // Делаем еще одну попытку запросить состояние через 3 секунды
+              setTimeout(() => {
+                socket.emit('requestRoomState', { roomId: currentRoom.id });
+
+                // И финальная проверка еще через 1 секунду
+                setTimeout(() => {
+                  const finalCheck = currentRoom.players.find(p => p.userId === currentUser.id);
+                  if (finalCheck && finalCheck.isReady) {
+                    console.log('Игрок отмечен как готовый после финальной проверки');
+                    updatePlayerReady(currentUser.id, true);
+                  } else {
+                    console.error('Игрок все еще не отмечен как готовый после всех проверок');
+                    // Устанавливаем флаг принудительно, если сервер не ответил
+                    console.log('Принудительно отмечаем игрока как готового...');
+                    updatePlayerReady(currentUser.id, true);
+                  }
+                }, 1000);
+              }, 3000);
+            }
+          }, 1000);
+        }
+      }, 10000); // Увеличенный таймаут для более надежного ожидания
 
       return true;
-    } catch (err) {
-      console.error('GameContext: Ошибка при отправке выбранных карт:', err);
-      setError(`Ошибка отправки карт: ${err.message}`);
+    } catch (error) {
+      console.error('selectCardsForBattle: Ошибка при отправке выбранных карт:', error);
+      setError(`Ошибка при отправке выбранных карт: ${error.message}`);
       return false;
     }
   };
@@ -1054,21 +1166,20 @@ export function GameProvider({ children }) {
     });
   };
 
-  // Сброс состояния игры
-  const resetGame = () => {
-    setCurrentRoom(null);
-    setGameStatus('idle');
-    setPlayerReady(false);
-    setGameState(null);
-    setSelectedCards([]);
-    setBattleLog([]);
-    setCurrentEvent(null);
-    setRoomChecked(false); // Сбрасываем флаг проверки комнаты
-
-    // Очищаем localStorage
-    localStorage.removeItem('currentRoom');
-    localStorage.removeItem('gameStatus');
-  };
+  // Загружаем сохраненное значение playerReady из sessionStorage при монтировании
+  useEffect(() => {
+    try {
+      const savedPlayerReady = sessionStorage.getItem('playerReady');
+      if (savedPlayerReady === 'true') {
+        const timestamp = sessionStorage.getItem('playerReadyTimestamp');
+        const source = sessionStorage.getItem('playerReadySource');
+        console.log(`GameContext: Загружен сохраненный статус playerReady=true из sessionStorage, timestamp=${timestamp}, source=${source}`);
+        setPlayerReady(true);
+      }
+    } catch (e) {
+      console.error('GameContext: Ошибка при чтении из sessionStorage:', e);
+    }
+  }, []);
 
   // Диагностика состояния сокета - улучшенная версия
   const diagnoseSockets = () => {
@@ -1270,7 +1381,7 @@ export function GameProvider({ children }) {
       if (cardsCollection.length === 0 && !loading) {
         console.log('Статус изменен на выбор карт, но карты не загружены - загружаем их...');
         loadCards().then(cards => {
-          console.log(`Загружено ${cards?.length || 0} карт при изменении статуса игры`);
+          console.log(`Загружено ${cards?.length || 0} карт при изменении статуса`);
         }).catch(err => {
           console.error('Ошибка загрузки карт при изменении статуса:', err);
         });
@@ -1281,6 +1392,80 @@ export function GameProvider({ children }) {
       }
     }
   }, [gameStatus, currentRoom, currentUser, cardsCollection.length, loading, loadCards]);
+
+  // Функция диагностики состояния карт и загрузки
+  const diagnoseCardsState = useCallback(() => {
+    console.group('🔍 ДИАГНОСТИКА СОСТОЯНИЯ КАРТ');
+    console.log('Текущее время:', new Date().toLocaleTimeString());
+
+    // Информация о коллекции карт
+    console.log(`Карты в коллекции: ${cardsCollection.length} шт.`);
+    if (cardsCollection.length > 0) {
+      // Распределение по типам
+      const cardTypes = {};
+      cardsCollection.forEach(card => {
+        cardTypes[card.type] = (cardTypes[card.type] || 0) + 1;
+      });
+      console.log('Распределение по типам:', cardTypes);
+
+      // Проверка целостности первых карт
+      const sampleCards = cardsCollection.slice(0, 3);
+      console.log('Образцы карт:', sampleCards);
+    }
+
+    // Состояние загрузки
+    console.log('Статус загрузки:', {
+      loading,
+      cardsRequested,
+      globalLoadingFlag: window._cardsLoadingInProgress || false,
+      promiseExists: !!window._cardsLoadingPromise
+    });
+
+    // Статус пользователя и комнаты
+    console.log('Контекст игры:', {
+      room: currentRoom || 'нет',
+      gameStatus: gameStatus || 'нет',
+      socketConnected: socket?.connected ? 'да' : 'нет',
+      userId: currentUser?.id || 'нет'
+    });
+
+    // Счетчики инициализации
+    if (!window._cardsLoadStats) {
+      window._cardsLoadStats = {
+        totalCalls: 0,
+        successfulLoads: 0,
+        failedLoads: 0,
+        lastCall: null
+      };
+    }
+    console.log('Статистика вызовов loadCards:', window._cardsLoadStats);
+
+    console.groupEnd();
+
+    // Возвращаем краткую сводку
+    return {
+      cardsCount: cardsCollection.length,
+      loading,
+      loadStats: window._cardsLoadStats
+    };
+  }, [cardsCollection, loading, cardsRequested, currentRoom, gameStatus, socket, currentUser]);
+
+  // Увеличиваем интервал проверки состояния комнаты
+  useEffect(() => {
+    if (currentRoom && socket && socket.connected) {
+      console.log('GameContext: Запускаем интервал проверки состояния комнаты:', currentRoom);
+
+      const intervalId = setInterval(() => {
+        if (socket && socket.connected) {
+          socket.emit('getRoomState', { roomId: currentRoom });
+        }
+      }, 3000); // Уменьшаем интервал до 3 секунд для более частой проверки
+
+      return () => {
+        clearInterval(intervalId);
+      };
+    }
+  }, [currentRoom, socket]);
 
   // Предоставляем значение контекста
   const value = {
@@ -1305,6 +1490,7 @@ export function GameProvider({ children }) {
     loadCards,
     diagnoseSockets,
     reconnectSocket,
+    diagnoseCardsState,
     socket,
     setGameStatus,
     throttledGetRoomState: debouncedGetRoomState,

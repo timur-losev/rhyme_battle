@@ -335,84 +335,177 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Обработчик для выбора карт
-  socket.on('selectCards', (data) => {
+  // Обработчик события выбора карт игроком
+  socket.on('selectCards', async (data) => {
+    console.log(`[SERVER] Событие selectCards от ${socket.id}: `, JSON.stringify(data));
+
+    // Валидация данных
+    if (!data) {
+      console.error(`[SERVER] Ошибка в selectCards: Отсутствуют данные`);
+      socket.emit('cardsSelected', { success: false, message: 'Отсутствуют данные для выбора карт' });
+      return;
+    }
+
+    const { roomId, userId, cards } = data;
+
+    // Проверяем обязательные параметры
+    if (!roomId) {
+      console.error(`[SERVER] Ошибка в selectCards: Отсутствует roomId`);
+      socket.emit('cardsSelected', { success: false, message: 'Отсутствует ID комнаты' });
+      return;
+    }
+
+    if (!userId) {
+      console.error(`[SERVER] Ошибка в selectCards: Отсутствует userId`);
+      socket.emit('cardsSelected', { success: false, message: 'Отсутствует ID пользователя' });
+      return;
+    }
+
+    if (!cards || !Array.isArray(cards) || cards.length === 0) {
+      console.error(`[SERVER] Ошибка в selectCards: Некорректный формат карт`, cards);
+      socket.emit('cardsSelected', { success: false, message: 'Некорректный формат выбранных карт' });
+      return;
+    }
+
+    console.log(`[SERVER] Обработка выбора карт для игрока ${userId} в комнате ${roomId}, карты: ${cards.length}`);
+
     try {
-      // Проверка наличия необходимых данных
-      if (!data || !data.roomId || !data.userId || !data.cards) {
-        console.error('Отсутствуют необходимые данные для выбора карт:', data);
-        socket.emit('error', { message: 'Неполные данные для выбора карт' });
-        return;
-      }
+      // Сохраняем выбранные карты
+      const result = await gameService.selectCards(roomId, userId, cards);
 
-      const { roomId, userId, cards } = data;
-      console.log(`[${new Date().toISOString()}] Пользователь ${userId} выбрал карты в комнате ${roomId}:`, cards);
+      console.log(`[SERVER] Результат выбора карт:`, result);
 
-      // Проверяем наличие карт
-      if (!Array.isArray(cards) || cards.length === 0) {
-        console.error('Некорректный формат выбранных карт:', cards);
-        socket.emit('error', { message: 'Некорректный формат выбранных карт' });
-        return;
-      }
-
-      try {
-        // Обработка выбора карт через сервис
-        const result = gameService.selectCards(roomId, userId, cards);
-
-        if (!result || !result.success) {
-          console.error('Ошибка при выборе карт:', result?.message || 'Неизвестная ошибка');
-          socket.emit('error', { message: result?.message || 'Не удалось выбрать карты' });
-          return;
-        }
-
-        // Отправляем подтверждение выбора карт самому игроку
+      if (result.success) {
+        // Отправляем подтверждение клиенту
         socket.emit('cardsSelected', {
           success: true,
-          cards,
+          message: 'Карты успешно выбраны',
+          userId: userId,
           timestamp: new Date().toISOString(),
-          message: 'Ваш выбор карт подтвержден'
+          isReady: true
         });
 
-        // Оповещаем всех игроков в комнате о том, что игрок готов
-        io.to(roomId).emit('playerReady', {
-          userId,
-          timestamp: new Date().toISOString(),
-          message: `Игрок ${userId} выбрал карты и готов к бою`
-        });
+        // Проверяем текущее состояние комнаты
+        const roomState = gameService.getRoomState(roomId);
 
-        // Обновляем состояние комнаты для всех
-        setTimeout(() => {
-          const roomState = gameService.getRoomState(roomId);
-          io.to(roomId).emit('roomState', {
-            ...roomState,
-            timestamp: new Date().toISOString(),
-            message: 'Обновление состояния после выбора карт'
-          });
-        }, 500);
+        if (roomState && !roomState.error) {
+          // Находим игрока в состоянии комнаты
+          const player = roomState.players.find(p => p.userId === userId);
 
-        // Проверяем, выбрали ли все игроки свои карты
-        if (gameService.areAllPlayersReady(roomId)) {
-          console.log('Все игроки готовы в комнате:', roomId);
+          if (player && player.isReady) {
+            console.log(`[SERVER] Игрок ${userId} отмечен как готовый в состоянии комнаты`);
 
-          // Запускаем бой с небольшой задержкой для гарантии обработки
-          setTimeout(() => {
-            const battleState = gameService.getBattleState(roomId);
-            io.to(roomId).emit('battleStart', {
-              ...battleState,
-              timestamp: new Date().toISOString(),
-              message: 'Начало боя! Все игроки готовы.'
+            // Отправляем событие готовности игрока этому клиенту
+            socket.emit('playerReady', {
+              userId: userId,
+              roomId: roomId,
+              timestamp: new Date().toISOString()
             });
-          }, 1000);
-        }
-      } catch (error) {
-        console.error('Ошибка при обработке выбора карт:', error);
-        socket.emit('error', { message: 'Ошибка обработки выбора карт', details: error.message });
-      }
-    } catch (error) {
-      console.error('Критическая ошибка при выборе карт:', error);
-      socket.emit('error', { message: 'Критическая ошибка сервера', details: error.message });
-    }
-  });
+
+            // Отправляем событие готовности игрока всем в комнате
+            io.to(roomId).emit('playerReady', {
+              userId: userId,
+              roomId: roomId,
+              timestamp: new Date().toISOString()
+            });
+
+            // Отправляем обновленное состояние комнаты всем клиентам
+            io.to(roomId).emit('roomState', {
+              ...roomState,
+              timestamp: new Date().toISOString(),
+              message: `Игрок ${userId} выбрал карты и готов к игре`
+            });
+
+            // Отправляем дополнительное событие updatePlayerStatus для надежности
+            io.to(roomId).emit('updatePlayerStatus', {
+              userId: userId,
+              console.log('Получен запрос на выбор карт:', data);
+
+              try {
+                // Проверяем, что все необходимые данные переданы
+                if(!data || !data.roomId || !data.userId || !data.cards) {
+              console.error('Некорректный запрос на выбор карт:', data);
+              socket.emit('error', { message: 'Некорректный запрос на выбор карт' });
+              return;
+            }
+
+            // Проверяем формат выбранных карт
+            if (!Array.isArray(data.cards) || data.cards.length === 0) {
+              console.error('Некорректный формат выбранных карт:', data.cards);
+              socket.emit('error', { message: 'Некорректный формат выбранных карт' });
+              return;
+            }
+
+            console.log(`Выбор карт для игрока ${data.userId} в комнате ${data.roomId}...`);
+
+            try {
+              // Сохраняем выбранные карты в БД
+              await gameService.selectCards(data.roomId, data.userId, data.cards);
+
+              console.log(`Выбор карт успешен для игрока ${data.userId} в комнате ${data.roomId}, отправляем подтверждение`);
+
+              // Отправляем подтверждение о выбранных картах клиенту
+              socket.emit('cardsSelected', {
+                success: true,
+                message: 'Карты успешно выбраны',
+                userId: data.userId,
+                timestamp: new Date().toISOString()
+              });
+
+              // Получаем обновленное состояние комнаты
+              const room = await gameService.getGame(data.roomId);
+
+              // Проверяем, отмечен ли игрок как готовый в состоянии комнаты
+              if (room && room.players) {
+                const player = room.players.find(p => p.userId === data.userId);
+                if (player && player.isReady) {
+                  console.log(`Проверка успешна: Игрок ${data.userId} отмечен как готовый в состоянии комнаты ${data.roomId}`);
+
+                  // Отправляем дополнительное подтверждение о готовности игрока
+                  socket.emit('playerReady', {
+                    userId: data.userId,
+                    isReady: true,
+                    timestamp: new Date().toISOString()
+                  });
+                  console.log(`Подтверждение cardsSelected отправлено игроку ${data.userId}`);
+
+                  // Уведомляем всех игроков в комнате
+                  io.to(data.roomId).emit('playerReady', {
+                    userId: data.userId,
+                    roomId: data.roomId,
+                    timestamp: new Date().toISOString()
+                  });
+                  console.log(`Оповещение playerReady отправлено в комнату ${data.roomId}`);
+
+                  // Явно отправляем обновление статуса игрока
+                  socket.emit('updatePlayerStatus', {
+                    userId: data.userId,
+                    isReady: true,
+                    timestamp: new Date().toISOString()
+                  });
+
+                  // Отправляем обновленное состояние комнаты всем игрокам
+                  const roomState = await gameService.getRoomState(data.roomId);
+                  io.to(data.roomId).emit('roomState', roomState);
+                  console.log(`Обновляем состояние комнаты ${data.roomId} для всех игроков после выбора карт`);
+                } else {
+                  console.error(`ОШИБКА: Игрок ${data.userId} НЕ отмечен как готовый в состоянии комнаты после selectCards!`);
+                  // Отправляем предупреждение клиенту
+                  socket.emit('error', {
+                    message: 'Сервер принял карты, но не смог отметить игрока как готового',
+                    code: 'PLAYER_NOT_READY_ERROR'
+                  });
+                }
+              }
+            } catch (error) {
+              console.error('Ошибка при выборе карт:', error);
+              socket.emit('error', { message: `Ошибка при выборе карт: ${error.message}` });
+            }
+          } catch (error) {
+            console.error('Ошибка обработки запроса selectCards:', error);
+            socket.emit('error', { message: 'Внутренняя ошибка сервера при выборе карт' });
+          }
+        });
 
   // Обработчик для игровых действий (разыгрывание карты)
   socket.on('playCard', (data) => {

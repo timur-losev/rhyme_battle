@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useGame } from '../../contexts/GameContext';
 import Card from './Card';
 
@@ -15,6 +15,117 @@ const TEST_STATUSES = [
   'idle'
 ];
 
+// Отдельный компонент CardsDebugTools для экспорта
+function CardsDebugToolsComponent({ toggleVisible = true }) {
+  const { loadCards, cardsCollection, loading, diagnoseCardsState } = useGame();
+  const [debugVisible, setDebugVisible] = useState(false);
+  const [debugResult, setDebugResult] = useState(null);
+
+  // Запускает диагностику состояния карт
+  const runDiagnostics = useCallback(() => {
+    console.log('Запуск диагностики карт...');
+    try {
+      // Если функция диагностики существует, запускаем ее
+      if (typeof diagnoseCardsState === 'function') {
+        const result = diagnoseCardsState();
+        setDebugResult(result);
+      } else {
+        // Иначе формируем базовый результат
+        setDebugResult({
+          cardsCount: cardsCollection.length,
+          loading,
+          loadStats: { totalCalls: 0, successfulLoads: 0, failedLoads: 0 }
+        });
+        console.log('Функция diagnoseCardsState недоступна, используем базовую диагностику');
+      }
+    } catch (err) {
+      console.error('Ошибка при диагностике карт:', err);
+    }
+  }, [diagnoseCardsState, cardsCollection.length, loading]);
+
+  // Принудительно перезагружает карты
+  const forceLoadCards = useCallback(async () => {
+    console.log('Принудительная загрузка карт...');
+    try {
+      const cards = await loadCards();
+      console.log(`Загружено ${cards?.length || 0} карт`);
+      runDiagnostics();
+    } catch (err) {
+      console.error('Ошибка загрузки карт:', err);
+    }
+  }, [loadCards, runDiagnostics]);
+
+  // Если не нужно отображать кнопку переключения, скрываем компонент
+  if (!toggleVisible && !debugVisible) {
+    return null;
+  }
+
+  return (
+    <div className="card-debug-tools">
+      {toggleVisible && (
+        <button
+          onClick={() => setDebugVisible(prev => !prev)}
+          className="px-3 py-1 text-xs bg-gray-700 text-white rounded mb-2"
+        >
+          {debugVisible ? 'Скрыть инструменты отладки' : 'Показать инструменты отладки'}
+        </button>
+      )}
+
+      {debugVisible && (
+        <div className="p-3 bg-gray-800 rounded-lg mb-4 text-sm">
+          <h3 className="font-bold mb-2 text-white">Отладка карт</h3>
+
+          <div className="grid grid-cols-2 gap-2 mb-3">
+            <button
+              onClick={runDiagnostics}
+              className="px-2 py-1 bg-blue-600 text-white rounded"
+              disabled={loading}
+            >
+              Диагностика карт
+            </button>
+            <button
+              onClick={forceLoadCards}
+              className="px-2 py-1 bg-yellow-600 text-white rounded"
+              disabled={loading}
+            >
+              Принуд. загрузка
+            </button>
+          </div>
+
+          {loading && (
+            <div className="text-yellow-400 mb-2">
+              Загрузка карт...
+            </div>
+          )}
+
+          {debugResult && (
+            <div className="bg-gray-900 p-2 rounded text-xs font-mono text-green-400 overflow-auto max-h-32">
+              <div>Карт: {debugResult.cardsCount}</div>
+              <div>Загрузка: {debugResult.loading ? 'да' : 'нет'}</div>
+              <div>Всего вызовов: {debugResult.loadStats?.totalCalls || 0}</div>
+              <div>Успешно: {debugResult.loadStats?.successfulLoads || 0}</div>
+              <div>Ошибок: {debugResult.loadStats?.failedLoads || 0}</div>
+            </div>
+          )}
+
+          <div className="text-xs text-gray-400 mt-2">
+            Проблемы отображения карт могут быть из-за:
+            <ul className="list-disc pl-4 mt-1">
+              <li>Отсутствия загрузки карт</li>
+              <li>Ошибки в фильтрации карт</li>
+              <li>Проблем в компоненте Card</li>
+              <li>Неправильной структуры данных</li>
+            </ul>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Экспортируем компонент отладки
+export const CardsDebugTools = CardsDebugToolsComponent;
+
 const CardSelector = () => {
   // Получаем все необходимые свойства и функции из контекста сразу на верхнем уровне
   const {
@@ -27,7 +138,8 @@ const CardSelector = () => {
     gameStatus,
     currentRoom,
     socket,
-    debugCardInfo
+    debugCardInfo,
+    diagnoseCardsState
   } = useGame();
 
   const [selectedCards, setSelectedCards] = useState([]);
@@ -63,6 +175,26 @@ const CardSelector = () => {
       componentLoaded: true
     }));
 
+    // Добавляем глобальный обработчик пользовательского события
+    const handlePlayerReadyStateChange = (event) => {
+      console.log('CardSelector: Получено пользовательское событие playerReadyStateChanged:', event.detail);
+
+      if (event.detail.ready === true) {
+        // Обновляем UI, показывая что выбор карт подтвержден
+        setLocalState(prev => ({
+          ...prev,
+          selectionInProgress: false,
+          errorDetails: '',
+          retryAttempt: 0,
+          successTime: new Date().toISOString()
+        }));
+
+        console.log('CardSelector: UI обновлен на основе пользовательского события');
+      }
+    };
+
+    window.addEventListener('playerReadyStateChanged', handlePlayerReadyStateChange);
+
     // СРАЗУ загружаем карты независимо от состояния
     console.log('⚠️ ПРИНУДИТЕЛЬНАЯ ЗАГРУЗКА КАРТ В CARD SELECTOR ⚠️');
     loadCards().then(cards => {
@@ -70,6 +202,11 @@ const CardSelector = () => {
     }).catch(err => {
       console.error('CardSelector: Ошибка загрузки карт при монтировании:', err);
     });
+
+    // Удаляем обработчик события при размонтировании
+    return () => {
+      window.removeEventListener('playerReadyStateChanged', handlePlayerReadyStateChange);
+    };
   }, []);
   // КОНЕЦ ТЕСТОВОГО БЛОКА
 
@@ -124,117 +261,204 @@ const CardSelector = () => {
   };
 
   const handleConfirmSelection = () => {
-    if (selectedCards.length === MAX_SELECTABLE_CARDS) {
-      console.log('CardSelector: Подтверждение выбора карт:', selectedCards);
+    if (selectedCards.length !== MAX_SELECTABLE_CARDS) {
+      setLocalState(prev => ({
+        ...prev,
+        errorDetails: `Необходимо выбрать ${MAX_SELECTABLE_CARDS} карт`
+      }));
+      return;
+    }
 
-      try {
-        // Добавляем обратную связь непосредственно в компоненте
-        setLocalState(prev => ({
-          ...prev,
-          selectionInProgress: true,
-          lastSelectionAttempt: new Date().toISOString(),
-          lastSelectedCards: [...selectedCards], // Сохраняем копию последнего выбора
-          errorDetails: null // Сбрасываем предыдущие ошибки
-        }));
+    console.log('CardSelector: Нажата кнопка подтверждения выбора карт:', selectedCards);
 
-        // Показываем более подробное сообщение через консоль
-        console.table({
-          'Выбранные карты': selectedCards,
-          'Время попытки': new Date().toLocaleTimeString(),
-          'Статус игры': gameStatus,
-          'ID комнаты': currentRoom || 'Нет'
-        });
+    // Проверяем глобальный статус готовности
+    if (window._playerReadyState === true) {
+      console.log('CardSelector: Игрок уже отмечен как готовый в глобальном состоянии');
+      setLocalState(prev => ({
+        ...prev,
+        selectionInProgress: false,
+        errorDetails: ''
+      }));
+      return;
+    }
 
-        // Вызываем функцию выбора карт из контекста с обработкой результата
-        const result = selectCardsForBattle(selectedCards);
+    // Проверяем, подключен ли сокет
+    if (!socket || !socket.connected) {
+      console.error('CardSelector: Сокет не подключен при попытке подтвердить выбор карт');
+      setLocalState(prev => ({
+        ...prev,
+        errorDetails: 'Нет соединения с сервером. Пожалуйста, обновите страницу и попробуйте снова.'
+      }));
+      return;
+    }
 
-        console.log('CardSelector: Результат отправки карт:', result);
+    // Добавляем явное логирование состояния готовности игрока перед отправкой
+    console.log('CardSelector: Текущее состояние playerReady перед отправкой:', playerReady);
 
-        // Проверяем результат и предоставляем обратную связь
-        if (result === false) {
-          console.error('CardSelector: Ошибка при отправке выбранных карт');
+    // Очистка предыдущих ошибок
+    setLocalState(prev => ({
+      ...prev,
+      errorDetails: '',
+      selectionInProgress: true,
+      lastSelectionAttempt: new Date().toISOString()
+    }));
 
-          setTimeout(() => {
-            // Если через 1 секунду всё ещё идёт отправка (ожидание восстановления соединения)
-            if (localState.selectionInProgress) {
-              // Обновляем UI, но не сбрасываем флаг
-              setLocalState(prev => ({
-                ...prev,
-                errorDetails: 'Проблема с соединением, пробуем восстановить...',
-                retryAttempt: (prev.retryAttempt || 0) + 1
-              }));
-            }
-          }, 1000);
+    // Отмечаем, что есть активная ошибка UI, которую можно сбросить через событие
+    window._cardSelectionErrorUI = true;
 
-          // Через 6 секунд если выбор всё ещё обрабатывается, предлагаем отменить
-          setTimeout(() => {
-            if (localState.selectionInProgress && !playerReady) {
-              alert('Ошибка при отправке выбранных карт. Возможно, есть проблемы с соединением. Попробуйте обновить страницу и выбрать карты снова.');
+    // Диагностика состояния сокета
+    console.log("CardSelector: Состояние сокета:", {
+      id: socket?.id,
+      connected: socket?.connected,
+      disconnected: socket?.disconnected
+    });
 
-              setLocalState(prev => ({
-                ...prev,
-                selectionInProgress: false,
-                errorDetails: 'Таймаут ожидания ответа от сервера'
-              }));
-            }
-          }, 6000);
-        } else {
-          console.log('CardSelector: Карты успешно отправлены на сервер');
+    // ДОПОЛНИТЕЛЬНАЯ ДИАГНОСТИКА: устанавливаем явные обработчики событий
+    console.log("CardSelector: Устанавливаем локальные обработчики для диагностики");
 
-          // Добавляем таймер для проверки обновления статуса
-          setTimeout(() => {
-            if (!playerReady) {
-              console.log('CardSelector: Статус игрока не обновился на "готов" после отправки карт');
+    const onCardSelectedHandler = (data) => {
+      console.log("CardSelector: Получено событие cardsSelected:", data);
 
-              // Обновляем состояние с информацией о задержке ответа
-              setLocalState(prev => ({
-                ...prev,
-                errorDetails: 'Сервер получил карты, но не подтвердил выбор. Ожидание...'
-              }));
-
-              // На всякий случай еще раз запрашиваем обновление состояния через сокет
-              if (socket && socket.connected) {
-                socket.emit('getRoomState', { roomId: currentRoom });
-              }
-
-              // Если через 5 секунд статус не обновился, предлагаем действия
-              setTimeout(() => {
-                if (!playerReady) {
-                  alert('Сервер не подтвердил выбор карт. Возможно, есть проблемы на сервере. Попробуйте выбрать карты еще раз или обновите страницу.');
-
-                  // Сбрасываем флаг процесса выбора
-                  setLocalState(prev => ({
-                    ...prev,
-                    selectionInProgress: false,
-                    errorDetails: 'Таймаут ожидания подтверждения от сервера'
-                  }));
-                } else {
-                  // Если статус обновился, отмечаем успешное завершение
-                  setLocalState(prev => ({
-                    ...prev,
-                    selectionInProgress: false,
-                    successTime: new Date().toISOString(),
-                    errorDetails: null
-                  }));
-                }
-              }, 5000);
-            }
-          }, 3000);
-        }
-      } catch (err) {
-        console.error('CardSelector: Ошибка при подтверждении выбора карт:', err);
-
-        // Показываем подробное сообщение об ошибке
+      if (data && data.success) {
+        console.log("CardSelector: Сбрасываем ошибку после получения cardsSelected с success=true");
         setLocalState(prev => ({
           ...prev,
           selectionInProgress: false,
-          errorDetails: `Ошибка: ${err.message || 'Неизвестная ошибка'}`
+          errorDetails: '',
+          retryAttempt: 0,
+          successTime: new Date().toISOString()
         }));
 
-        alert(`Произошла ошибка: ${err.message || 'Неизвестная ошибка'}. Попробуйте еще раз.`);
+        // Сбрасываем флаг ошибки UI
+        window._cardSelectionErrorUI = false;
       }
-    } else {
-      alert(`Необходимо выбрать ровно ${MAX_SELECTABLE_CARDS} карт для продолжения.`);
+    };
+
+    const onPlayerReadyHandler = (data) => {
+      console.log("CardSelector: Получено событие playerReady:", data);
+
+      // Обрабатываем даже без явного userId
+      if (data) {
+        console.log("CardSelector: Сбрасываем ошибку после получения playerReady");
+        setLocalState(prev => ({
+          ...prev,
+          selectionInProgress: false,
+          errorDetails: '',
+          retryAttempt: 0,
+          successTime: new Date().toISOString()
+        }));
+
+        // Сбрасываем флаг ошибки UI
+        window._cardSelectionErrorUI = false;
+      }
+    };
+
+    const onUpdatePlayerStatusHandler = (data) => {
+      console.log("CardSelector: Получено событие updatePlayerStatus:", data);
+
+      if (data && data.isReady === true) {
+        console.log("CardSelector: Сбрасываем ошибку после получения updatePlayerStatus с isReady=true");
+        setLocalState(prev => ({
+          ...prev,
+          selectionInProgress: false,
+          errorDetails: '',
+          retryAttempt: 0,
+          successTime: new Date().toISOString()
+        }));
+
+        // Сбрасываем флаг ошибки UI
+        window._cardSelectionErrorUI = false;
+      }
+    };
+
+    // Установка обработчика для roomState
+    const onRoomStateHandler = (data) => {
+      console.log("CardSelector: Получено событие roomState для проверки статуса игрока");
+
+      if (data && data.players) {
+        // Используем context socket, который содержит информацию о текущем пользователе
+        const userId = socket && socket.auth && socket.auth.userId;
+        const player = data.players.find(p => p.userId === userId);
+
+        if (player && player.isReady) {
+          console.log("CardSelector: Игрок найден как готовый в roomState, сбрасываем ошибку");
+          setLocalState(prev => ({
+            ...prev,
+            selectionInProgress: false,
+            errorDetails: '',
+            retryAttempt: 0,
+            successTime: new Date().toISOString()
+          }));
+
+          // Сбрасываем флаг ошибки UI
+          window._cardSelectionErrorUI = false;
+        }
+      }
+    };
+
+    // Устанавливаем временные обработчики для диагностики
+    socket.on('cardsSelected', onCardSelectedHandler);
+    socket.on('playerReady', onPlayerReadyHandler);
+    socket.on('updatePlayerStatus', onUpdatePlayerStatusHandler);
+    socket.on('roomState', onRoomStateHandler);
+
+    // Через 15 секунд снимаем диагностические обработчики
+    setTimeout(() => {
+      console.log("CardSelector: Снимаем локальные диагностические обработчики");
+      socket.off('cardsSelected', onCardSelectedHandler);
+      socket.off('playerReady', onPlayerReadyHandler);
+      socket.off('updatePlayerStatus', onUpdatePlayerStatusHandler);
+      socket.off('roomState', onRoomStateHandler);
+    }, 15000);
+
+    // Отправляем карты
+    try {
+      const result = selectCardsForBattle(selectedCards);
+      console.log('CardSelector: Результат вызова selectCardsForBattle:', result);
+
+      // Запускаем таймер для проверки статуса
+      setTimeout(() => {
+        if (!playerReady) {
+          console.log('CardSelector: Проверка после 5 секунд - статус playerReady:', playerReady);
+
+          if (!playerReady) {
+            console.log('CardSelector: Игрок все еще не отмечен как готовый после 5 секунд');
+            setLocalState(prev => ({
+              ...prev,
+              selectionInProgress: false,
+              errorDetails: 'Сервер получил карты, но не подтвердил выбор. Ожидание...',
+              retryAttempt: (prev.retryAttempt || 0) + 1
+            }));
+          }
+        } else {
+          console.log('CardSelector: Проверка после 5 секунд - игрок уже отмечен как готовый');
+        }
+      }, 5000);
+
+      // Запускаем и второй таймер, для повторной проверки
+      setTimeout(() => {
+        console.log('CardSelector: Проверка после 10 секунд - статус playerReady:', playerReady);
+
+        if (!playerReady) {
+          console.log('CardSelector: Игрок все еще не отмечен как готовый после 10 секунд');
+
+          // Запрашиваем обновление состояния комнаты
+          if (socket && socket.connected && currentRoom) {
+            console.log('CardSelector: Отправляем запрос getRoomState для проверки статуса');
+            socket.emit('getRoomState', { roomId: currentRoom });
+          }
+        }
+      }, 10000);
+
+      return true;
+    } catch (error) {
+      console.error('CardSelector: Ошибка при отправке карт:', error);
+      setLocalState(prev => ({
+        ...prev,
+        errorDetails: `Ошибка: ${error.message}`,
+        selectionInProgress: false
+      }));
+      return false;
     }
   };
 
@@ -518,322 +742,303 @@ const CardSelector = () => {
     console.log('===== КОНЕЦ ОТЛАДКИ СТРУКТУРЫ КАРТ =====');
   };
 
-  return (
-    <div className="w-full">
-      {/* ТЕСТОВЫЙ БЛОК - ЯВНОЕ ПОДТВЕРЖДЕНИЕ ЧТО ИЗМЕНЕНИЯ ПРИМЕНИЛИСЬ */}
-      <div className="mb-6 bg-red-800 p-4 rounded-lg text-white border-2 border-yellow-400">
-        <h2 className="text-2xl font-bold mb-2">⚠️ ТЕСТОВАЯ ВЕРСИЯ КОМПОНЕНТА ⚠️</h2>
-        <p>Этот блок виден только в отладочной версии компонента</p>
-        <div className="mt-2">
-          <p>Текущий статус игры: <span className="font-bold">{gameStatus || 'не установлен'}</span></p>
-          <p>Загружено карт: <span className="font-bold">{cardsCollection.length}</span></p>
-          <p>Время последней проверки: {new Date().toLocaleTimeString()}</p>
-          <p>Компонент загружен в: {localState.lastStatusCheck ? new Date(localState.lastStatusCheck).toLocaleTimeString() : 'неизвестно'}</p>
-        </div>
-      </div>
+  // Добавляем функцию для повторной отправки выбора карт
+  const retryCardSelection = () => {
+    console.log('CardSelector: Повторная попытка отправки выбора карт:', selectedCards);
 
-      <div className="mb-6 bg-gray-800 p-4 rounded-lg">
-        <h2 className="text-2xl font-bold mb-4 text-white">Выберите {MAX_SELECTABLE_CARDS} карт для баттла</h2>
+    if (selectedCards.length !== MAX_SELECTABLE_CARDS) {
+      alert(`Для повторной отправки необходимо выбрать ${MAX_SELECTABLE_CARDS} карт.`);
+      return;
+    }
 
-        {/* Статус выбора */}
-        <div className="mb-4">
-          <div className="flex items-center">
-            <span className="text-white mr-2">Выбрано: {selectedCards.length}/{MAX_SELECTABLE_CARDS}</span>
-            {playerReady ? (
-              <span className="bg-green-500 text-white px-3 py-1 rounded-full text-sm">
-                Готово
-              </span>
-            ) : localState.selectionInProgress ? (
-              <span className="bg-yellow-500 text-white px-3 py-1 rounded-full text-sm animate-pulse">
-                Отправка выбора...
-              </span>
-            ) : (
-              <button
-                className={`${isCardSelectionComplete
-                    ? 'bg-green-600 hover:bg-green-700'
-                    : 'bg-gray-600 cursor-not-allowed'
-                  } text-white px-4 py-2 rounded`}
-                disabled={!isCardSelectionComplete || localState.selectionInProgress}
-                onClick={handleConfirmSelection}
-              >
-                Подтвердить выбор
-              </button>
-            )}
+    setLocalState(prev => ({
+      ...prev,
+      retryAttempt: (prev.retryAttempt || 0) + 1,
+      lastRetryTime: new Date().toISOString(),
+      errorDetails: 'Повторная отправка карт...'
+    }));
 
-            {cardsCollection.length === 0 && (
-              <button
-                className="ml-4 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded"
-                onClick={handleManualLoadCards}
-              >
-                Загрузить карты
-              </button>
-            )}
+    // Явно проверяем соединение
+    if (!socket || !socket.connected) {
+      console.error('CardSelector: Сокет не подключен при повторной попытке!');
+      alert('Соединение с сервером отсутствует. Обновите страницу и попробуйте еще раз.');
+      return;
+    }
 
-            {/* Кнопка перезагрузки страницы */}
-            <button
-              className="ml-4 bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded"
-              onClick={handleReloadPage}
-            >
-              Перезагрузить страницу
-            </button>
+    // Повторно отправляем карты
+    const result = selectCardsForBattle(selectedCards);
+
+    console.log('CardSelector: Результат повторной отправки карт:', result);
+
+    if (result === false) {
+      setTimeout(() => {
+        alert('Не удалось отправить карты. Проверьте соединение с сервером и попробуйте еще раз.');
+      }, 500);
+    }
+  };
+
+  // Функция для отображения статуса отправки карт с возможностью повтора
+  const renderSelectionStatus = () => {
+    if (!localState.selectionInProgress && !localState.errorDetails) {
+      return null;
+    }
+
+    return (
+      <div className="bg-gray-800 p-4 rounded-lg mb-4">
+        <h3 className="text-xl font-bold mb-2">Статус выбора карт</h3>
+
+        {localState.selectionInProgress && (
+          <div className="flex items-center mb-2">
+            <div className="w-4 h-4 bg-yellow-500 rounded-full animate-pulse mr-2"></div>
+            <span className="text-yellow-500">Отправка выбора карт на сервер...</span>
           </div>
+        )}
 
-          {/* Отображение статуса последней попытки отправки карт */}
-          {localState.lastSelectionAttempt && (
-            <div className="text-sm mt-2">
-              <span className="text-gray-400">Последняя попытка отправки: </span>
-              <span className="text-yellow-400">
-                {new Date(localState.lastSelectionAttempt).toLocaleTimeString()}
-                ({Math.floor((new Date() - new Date(localState.lastSelectionAttempt)) / 1000)} сек. назад)
-              </span>
-              {playerReady && (
-                <span className="ml-2 text-green-400">✓ Выбор подтвержден!</span>
-              )}
-              {localState.errorDetails && (
-                <div className="mt-1 text-red-400">
-                  <span className="font-bold">Проблема: </span> {localState.errorDetails}
-                  {localState.retryAttempt > 0 && (
-                    <span className="ml-2">(Попытка восстановления: {localState.retryAttempt})</span>
-                  )}
-                </div>
-              )}
+        {localState.errorDetails && (
+          <div className="mb-3">
+            <div className="flex items-center mb-1">
+              <div className="w-4 h-4 bg-red-500 rounded-full mr-2"></div>
+              <span className="text-red-500">{localState.errorDetails}</span>
             </div>
-          )}
 
-          {/* Прогресс-бар отправки данных */}
-          {localState.selectionInProgress && (
-            <div className="mt-2 bg-gray-700 rounded-full h-2.5 w-full overflow-hidden">
-              <div
-                className="bg-blue-600 h-2.5 rounded-full animate-pulse"
-                style={{
-                  width: '100%',
-                  animationDuration: '1.5s'
-                }}
-              ></div>
+            <div className="text-xs text-gray-400 mb-2">
+              Последняя попытка: {new Date(localState.lastSelectionAttempt || Date.now()).toLocaleTimeString()}
+              {localState.retryAttempt > 0 && `, повторных попыток: ${localState.retryAttempt}`}
             </div>
-          )}
-        </div>
 
-        {/* Фильтры */}
-        <div className="flex flex-wrap gap-4 mb-4">
-          <div className="flex-1 min-w-[200px]">
-            <label htmlFor="search" className="block text-sm text-gray-400 mb-1">
-              Поиск
-            </label>
-            <input
-              type="text"
-              id="search"
-              name="search"
-              value={filters.search}
-              onChange={handleFilterChange}
-              placeholder="Поиск по названию или тексту..."
-              className="w-full bg-gray-700 text-white rounded px-3 py-2"
-              disabled={!isSelectionPhase || playerReady}
-            />
+            <div className="flex gap-2">
+              <button
+                onClick={retryCardSelection}
+                className="bg-blue-600 hover:bg-blue-700 px-3 py-1 rounded text-sm"
+                disabled={selectedCards.length !== MAX_SELECTABLE_CARDS}
+              >
+                Повторить отправку
+              </button>
+
+              <button
+                onClick={() => window.location.reload()}
+                className="bg-gray-600 hover:bg-gray-700 px-3 py-1 rounded text-sm"
+              >
+                Обновить страницу
+              </button>
+            </div>
           </div>
+        )}
 
-          <div className="w-40">
-            <label htmlFor="type" className="block text-sm text-gray-400 mb-1">
-              Тип карты
-            </label>
-            <select
-              id="type"
-              name="type"
-              value={filters.type}
-              onChange={handleFilterChange}
-              className="w-full bg-gray-700 text-white rounded px-3 py-2"
-              disabled={!isSelectionPhase || playerReady}
-            >
-              <option value="">Все типы</option>
-              <option value="attack">Атака</option>
-              <option value="defense">Защита</option>
-              <option value="combo">Комбо</option>
-              <option value="special">Специальная</option>
-            </select>
+        {playerReady && (
+          <div className="flex items-center mb-2">
+            <div className="w-4 h-4 bg-green-500 rounded-full mr-2"></div>
+            <span className="text-green-500">Выбор карт подтвержден!</span>
           </div>
-        </div>
-
-        {/* Статистика карт - для отладки */}
-        <div className="mt-2 text-xs text-gray-400">
-          <p>Всего загружено карт: {cardsCollection.length}</p>
-          <p>Статус загрузки: {loading ? 'Загрузка...' : 'Готово'}</p>
-          {renderCardLoadingDetails()}
-          <p>Текущая фаза: {gameStatus}</p>
-          <p>Время последней проверки: {new Date().toLocaleTimeString()}</p>
-        </div>
+        )}
       </div>
+    );
+  };
 
-      {/* Выбранные карты */}
-      {selectedCards.length > 0 && (
-        <div className="mb-6">
-          <h3 className="text-xl font-bold mb-4 text-white">Выбранные карты:</h3>
-          <div className="flex flex-wrap gap-4 overflow-x-auto py-4">
-            {selectedCards.map(cardId => {
-              const card = cardsCollection.find(c => c._id === cardId);
-              return (
-                card && (
-                  <Card
-                    key={card._id}
-                    card={card}
-                    isSelected={true}
-                    onClick={playerReady ? undefined : handleCardClick}
-                    isPlayable={!playerReady}
-                  />
-                )
-              );
-            })}
-          </div>
+  // Добавляем функцию для отображения списка карт
+  const renderCards = () => {
+    // Применяем фильтры к коллекции карт
+    const filteredCards = cardsCollection.filter(card => {
+      // Фильтр по типу
+      if (filters.type && card.type !== filters.type) {
+        return false;
+      }
+
+      // Фильтр по поиску в имени или описании
+      if (filters.search) {
+        const searchLower = filters.search.toLowerCase();
+        const nameMatch = card.name.toLowerCase().includes(searchLower);
+        const descMatch = card.description?.toLowerCase().includes(searchLower);
+        const coupletMatch = card.couplet?.toLowerCase().includes(searchLower);
+
+        if (!nameMatch && !descMatch && !coupletMatch) {
+          return false;
+        }
+      }
+
+      return true;
+    });
+
+    if (loading) {
+      return (
+        <div className="flex justify-center items-center p-8">
+          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
+          <span className="ml-3 text-gray-300">Загрузка карт...</span>
         </div>
-      )}
+      );
+    }
 
-      {/* Список всех карт для выбора с улучшенной обработкой ошибок */}
-      <div>
-        <h3 className="text-xl font-bold mb-4 text-white">Доступные карты:</h3>
-        {/* Отладочная информация о коллекции */}
-        <pre className="mt-2 mb-4 p-3 text-xs bg-gray-900 text-white rounded overflow-auto max-h-40">
-          {JSON.stringify({
-            gameStatus,
-            cardsTotal: cardsCollection.length,
-            filteredTotal: filteredCards.length,
-            filters,
-            sample: cardsCollection.length > 0 ?
-              JSON.stringify(cardsCollection[0]).substring(0, 100) + '...' : 'нет карт',
-            socketConnected: socket?.connected ? 'да' : 'нет',
-            currentRoom: currentRoom || 'нет',
-            playerReady
-          }, null, 2)}
-        </pre>
+    if (error) {
+      return (
+        <div className="bg-red-900 bg-opacity-50 p-4 rounded-lg text-center">
+          <p className="text-red-300 mb-3">{error}</p>
+          <button
+            onClick={handleManualLoadCards}
+            className="bg-blue-600 hover:bg-blue-700 px-3 py-1 rounded text-sm"
+          >
+            Повторить загрузку
+          </button>
+        </div>
+      );
+    }
 
-        {loading ? (
-          <div className="text-center py-10 text-white">
-            <div className="inline-block animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500 mb-3"></div>
-            <p>Загрузка карт...</p>
-          </div>
-        ) : error ? (
-          <div className="text-center py-10">
-            <p className="text-red-500 mb-4">{error}</p>
+    if (filteredCards.length === 0) {
+      return (
+        <div className="bg-gray-800 p-6 rounded-lg text-center">
+          <p className="text-gray-400 mb-3">
+            {cardsCollection.length === 0
+              ? "Карты не загружены"
+              : "Нет карт, соответствующих фильтрам"}
+          </p>
+          {cardsCollection.length === 0 ? (
             <button
-              className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded mr-4"
               onClick={handleManualLoadCards}
+              className="bg-blue-600 hover:bg-blue-700 px-3 py-1 rounded text-sm"
             >
-              Попробовать загрузить карты
+              Загрузить карты
             </button>
+          ) : (
             <button
-              className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded"
-              onClick={handleReloadPage}
+              onClick={() => setFilters({ type: '', search: '' })}
+              className="bg-gray-600 hover:bg-gray-700 px-3 py-1 rounded text-sm"
             >
-              Перезагрузить страницу
+              Сбросить фильтры
             </button>
-          </div>
-        ) : cardsCollection.length === 0 ? (
-          <div className="text-center py-10 text-white">
-            <p className="mb-4">Карты не загружены</p>
-            <div>
-              <button
-                className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded mr-4"
-                onClick={handleManualLoadCards}
-              >
-                Попробовать загрузить карты
-              </button>
-              <button
-                className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded"
-                onClick={handleReloadPage}
-              >
-                Перезагрузить страницу
-              </button>
+          )}
+        </div>
+      );
+    }
+
+    return (
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+        {filteredCards.map(card => (
+          <Card
+            key={card._id}
+            card={card}
+            isSelected={selectedCards.includes(card._id)}
+            isPlayable={!playerReady}
+            onClick={handleCardClick}
+          />
+        ))}
+      </div>
+    );
+  };
+
+  return (
+    <div className="card-selector">
+      <div className="mb-6">
+        <h2 className="text-2xl font-bold mb-2">Выберите карты для баттла</h2>
+        <p className="text-gray-300 mb-4">
+          Выберите {MAX_SELECTABLE_CARDS} карт, которые вы будете использовать в бою.
+          Стратегически подбирайте карты разных типов для максимальной эффективности.
+        </p>
+
+        {/* Отображаем отладочную панель */}
+        <CardsDebugTools toggleVisible={true} />
+
+        {/* Статус соединения */}
+        <div className="flex items-center mb-4">
+          <div className={`w-3 h-3 rounded-full mr-2 ${socket?.connected ? 'bg-green-500' : 'bg-red-500'}`}></div>
+          <span className={socket?.connected ? 'text-green-500' : 'text-red-500'}>
+            {socket?.connected ? 'Подключено к серверу' : 'Нет соединения с сервером'}
+          </span>
+        </div>
+
+        {/* Статус выбора карт */}
+        {renderSelectionStatus()}
+
+        {/* Готовность игрока */}
+        {playerReady ? (
+          <div className="bg-green-800 bg-opacity-40 p-4 rounded-lg mb-4">
+            <div className="flex items-center mb-2">
+              <svg className="w-6 h-6 text-green-500 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path>
+              </svg>
+              <h3 className="text-xl font-bold text-green-500">Вы готовы к бою!</h3>
             </div>
+            <p className="text-gray-300">Ожидание готовности соперника...</p>
           </div>
         ) : (
           <>
-            {/* ПРИНУДИТЕЛЬНОЕ ОТОБРАЖЕНИЕ ВСЕХ КАРТ - ОТЛАДОЧНЫЙ БЛОК */}
-            <div className="mb-6 bg-red-900 p-3 rounded-lg border border-yellow-500">
-              <h3 className="text-lg font-bold text-yellow-500 mb-2">⚠️ ОТЛАДОЧНОЕ ОТОБРАЖЕНИЕ КАРТ ({cardsCollection.length}) ⚠️</h3>
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                {cardsCollection.length > 0 ? (
-                  cardsCollection.slice(0, 8).map((card, index) => (
-                    <div key={card._id || index} className="bg-gray-800 p-4 rounded-lg">
-                      <h4 className="text-yellow-400 font-bold">{card.name || 'Без имени'}</h4>
-                      <p className="text-white">Тип: {card.type || 'Неизвестно'}</p>
-                      <p className="text-white">Сила: {card.power}</p>
-                      <p className="text-gray-300 text-sm mt-2">{card.couplet || 'Нет текста'}</p>
-                      <button
-                        className="mt-2 w-full bg-blue-600 hover:bg-blue-700 text-white px-2 py-1 rounded text-sm"
-                        onClick={() => handleCardClick(card)}
-                      >
-                        Выбрать
-                      </button>
-                    </div>
-                  ))
+            {/* Фильтры для карт */}
+            <div className="filters-container mb-4">
+              <div className="filter-controls flex flex-wrap gap-2 mb-3">
+                <select
+                  name="type"
+                  value={filters.type}
+                  onChange={handleFilterChange}
+                  className="bg-gray-700 text-white px-3 py-2 rounded"
+                >
+                  <option value="">Все типы</option>
+                  <option value="attack">Атака</option>
+                  <option value="defense">Защита</option>
+                  <option value="combo">Комбо</option>
+                  <option value="special">Специальная</option>
+                </select>
+
+                <input
+                  type="text"
+                  name="search"
+                  placeholder="Поиск по названию"
+                  value={filters.search}
+                  onChange={handleFilterChange}
+                  className="bg-gray-700 text-white px-3 py-2 rounded flex-grow"
+                />
+              </div>
+            </div>
+
+            {/* Выбранные карты */}
+            <div className="selected-cards mb-6">
+              <h3 className="text-xl font-bold mb-2">Выбранные карты ({selectedCards.length}/{MAX_SELECTABLE_CARDS})</h3>
+              <div className="bg-gray-800 p-3 rounded-lg">
+                {selectedCards.length === 0 ? (
+                  <p className="text-gray-400 italic">Выберите карты из списка ниже</p>
                 ) : (
-                  <div className="col-span-4 text-center text-red-500">
-                    Нет карт для отображения
+                  <div className="selected-cards-list flex flex-wrap gap-2">
+                    {selectedCards.map(cardId => {
+                      const card = cardsCollection.find(c => c._id === cardId);
+                      return card ? (
+                        <div
+                          key={card._id}
+                          className="selected-card-indicator px-2 py-1 rounded flex items-center bg-gray-700 hover:bg-red-900 cursor-pointer transition-colors"
+                          onClick={() => handleCardClick(card)}
+                        >
+                          <span className="font-bold mr-1">{card.power}</span>
+                          <span className="truncate" style={{ maxWidth: '150px' }}>{card.name}</span>
+                          <span className="ml-1 text-red-500">&times;</span>
+                        </div>
+                      ) : null;
+                    })}
                   </div>
                 )}
               </div>
-              <div className="mt-3 text-center">
+
+              <div className="mt-4">
                 <button
-                  className="bg-yellow-600 hover:bg-yellow-700 text-white px-4 py-2 rounded"
-                  onClick={() => setFilters({ type: '', search: '' })}
+                  className={`px-4 py-2 rounded font-bold w-full ${selectedCards.length === MAX_SELECTABLE_CARDS
+                    ? 'bg-green-600 hover:bg-green-700 text-white'
+                    : 'bg-gray-600 text-gray-300 cursor-not-allowed'
+                    }`}
+                  onClick={handleConfirmSelection}
+                  disabled={selectedCards.length !== MAX_SELECTABLE_CARDS}
                 >
-                  Сбросить все фильтры
+                  {selectedCards.length === MAX_SELECTABLE_CARDS
+                    ? 'Подтвердить выбор карт'
+                    : `Выберите еще ${MAX_SELECTABLE_CARDS - selectedCards.length} карт`}
                 </button>
               </div>
             </div>
-
-            {/* Обычное отображение карт */}
-            <div className="mb-4 p-2 bg-gray-700 rounded">
-              <p className="text-gray-300 text-sm">
-                Найдено {filteredCards.length} из {cardsCollection.length} карт
-                {filters.type || filters.search ? " (применены фильтры)" : ""}
-                <button
-                  className="ml-4 underline text-blue-400 hover:text-blue-300 text-xs"
-                  onClick={() => window.location.href = window.location.pathname + '?nofilter'}
-                >
-                  Показать все без фильтров
-                </button>
-              </p>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-              {/* Принудительно отображаем все карты, а не только отфильтрованные */}
-              {Array.isArray(displayCards) && displayCards.length > 0 ? (
-                displayCards.map(card => (
-                  card && card._id ? (
-                    <Card
-                      key={card._id}
-                      card={card}
-                      isSelected={selectedCards.includes(card._id)}
-                      onClick={handleCardClick}
-                      isPlayable={!playerReady && (!isCardSelectionComplete || selectedCards.includes(card._id))}
-                    />
-                  ) : (
-                    <div key={Math.random()} className="bg-red-800 p-4 rounded-lg text-white text-center">
-                      <p>Некорректная карта без ID</p>
-                      <pre className="text-xs mt-2 bg-gray-900 p-2 rounded overflow-auto">
-                        {JSON.stringify(card, null, 2)}
-                      </pre>
-                    </div>
-                  )
-                ))
-              ) : (
-                <div className="col-span-4 bg-red-800 p-4 rounded-lg text-white text-center">
-                  <p className="mb-2 font-bold">Проблема с отображением карт</p>
-                  <p>Количество карт в коллекции: {cardsCollection.length}</p>
-                  <p>Количество отфильтрованных карт: {filteredCards.length}</p>
-                  <p>Фильтры: {JSON.stringify(filters)}</p>
-                  <button
-                    className="mt-4 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded"
-                    onClick={() => setFilters({ type: '', search: '' })}
-                  >
-                    Сбросить фильтры
-                  </button>
-                </div>
-              )}
-            </div>
           </>
         )}
-      </div>
 
-      {renderDebugTools()}
+        {/* Список доступных карт */}
+        <div className="available-cards">
+          <h3 className="text-xl font-bold mb-2">Доступные карты</h3>
+          {renderCardLoadingDetails()}
+
+          {renderCards()}
+        </div>
+      </div>
     </div>
   );
 };
